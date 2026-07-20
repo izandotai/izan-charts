@@ -36,7 +36,7 @@ if(IZAN_CHARTS_IMPLOT_TARGET)
 else()
     FetchContent_Declare(izan_ui
         GIT_REPOSITORY https://github.com/izandotai/izan-ui.git
-        GIT_TAG 8941626
+        GIT_TAG 84a658b
         EXCLUDE_FROM_ALL
     )
     # implot, pinned by commit; the financial storey stands on it.
