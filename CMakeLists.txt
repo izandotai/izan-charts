@@ -21,28 +21,39 @@ endif()
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
-# The imgui stack arrives through izan-ui (its izan_imgui target:
-# imgui + glfw + freetype, backends included). Keep pins in lockstep
-# with other family members — the first declare wins.
-FetchContent_Declare(izan_ui
-    GIT_REPOSITORY https://github.com/izandotai/izan-ui.git
-    GIT_TAG 0522ce8
-    EXCLUDE_FROM_ALL
-)
-# implot, pinned by commit; the financial storey stands on it.
-FetchContent_Declare(implot
-    GIT_REPOSITORY https://github.com/epezent/implot.git
-    GIT_TAG d65a2bef53d32502407de3a4be80f191e2f412d7
-    EXCLUDE_FROM_ALL
-)
-FetchContent_MakeAvailable(izan_ui implot)
+# A host that already owns an imgui+implot stack names its implot
+# target here and no second stack is fetched — two static imgui
+# archives in one executable are a multiple-definition wreck. Left
+# empty, the stack arrives through izan-ui (its izan_imgui target:
+# imgui + glfw + freetype, backends included) with implot pinned by
+# commit on top. Keep family pins in lockstep — first declare wins.
+set(IZAN_CHARTS_IMPLOT_TARGET "" CACHE STRING
+    "Existing implot target to build the charts against")
 
-add_library(izan_implot STATIC
-    ${implot_SOURCE_DIR}/implot.cpp
-    ${implot_SOURCE_DIR}/implot_items.cpp
-)
-target_include_directories(izan_implot PUBLIC ${implot_SOURCE_DIR})
-target_link_libraries(izan_implot PUBLIC izan_imgui)
+if(IZAN_CHARTS_IMPLOT_TARGET)
+    add_library(izan_implot INTERFACE)
+    target_link_libraries(izan_implot INTERFACE ${IZAN_CHARTS_IMPLOT_TARGET})
+else()
+    FetchContent_Declare(izan_ui
+        GIT_REPOSITORY https://github.com/izandotai/izan-ui.git
+        GIT_TAG 484c01e
+        EXCLUDE_FROM_ALL
+    )
+    # implot, pinned by commit; the financial storey stands on it.
+    FetchContent_Declare(implot
+        GIT_REPOSITORY https://github.com/epezent/implot.git
+        GIT_TAG d65a2bef53d32502407de3a4be80f191e2f412d7
+        EXCLUDE_FROM_ALL
+    )
+    FetchContent_MakeAvailable(izan_ui implot)
+
+    add_library(izan_implot STATIC
+        ${implot_SOURCE_DIR}/implot.cpp
+        ${implot_SOURCE_DIR}/implot_items.cpp
+    )
+    target_include_directories(izan_implot PUBLIC ${implot_SOURCE_DIR})
+    target_link_libraries(izan_implot PUBLIC izan_imgui)
+endif()
 
 # The charts: candles, indicators and linked panes — no window
 # framework, no network, no opinion about where the data comes from.
