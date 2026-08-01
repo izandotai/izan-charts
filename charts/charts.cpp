@@ -469,10 +469,10 @@ void Chart::draw_expiry_risk_fan(const ImPlotRect& limits)
         for (int index = 0; index <= segments; ++index) {
             const double fraction = static_cast<double>(index) / segments;
             const double x = x0 + (x1 - x0) * fraction;
-            const double remaining_fraction = std::clamp(
-                (layer.end_t - x) / duration, 0.0, 1.0);
+            const double forward_fraction =
+                std::clamp((x - layer.start_t) / duration, 0.0, 1.0);
             const double move
-                = sigma * multiplier * std::sqrt(remaining_fraction);
+                = sigma * multiplier * std::sqrt(forward_fraction);
             const double adverse_price
                 = layer.current_price
                 * std::exp(layer.direction_up ? -move : move);
@@ -988,10 +988,10 @@ void Chart::draw_main_pane(
                     const double fraction
                         = static_cast<double>(index) / segments;
                     const double x = x0 + (x1 - x0) * fraction;
-                    const double remaining_fraction = std::clamp(
-                        (research.cone_end_t - x) / duration, 0.0, 1.0);
+                    const double forward_fraction = std::clamp(
+                        (x - research.cone_start_t) / duration, 0.0, 1.0);
                     const double move
-                        = sigma * multiplier * std::sqrt(remaining_fraction);
+                        = sigma * multiplier * std::sqrt(forward_fraction);
                     upper.push_back(ImPlot::PlotToPixels(
                         x, research.cone_center_price * std::exp(move)));
                     lower.push_back(ImPlot::PlotToPixels(
