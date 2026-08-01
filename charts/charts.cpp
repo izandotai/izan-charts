@@ -661,8 +661,7 @@ void Chart::draw_venue_race_layer()
         return;
     const float top_offset
         = research.available ? text_height + 32.0f : 8.0f;
-    const ImVec2 p0(
-        plot_pos.x + plot_size.x - width - 10.0f, plot_pos.y + top_offset);
+    const ImVec2 p0(plot_pos.x + 10.0f, plot_pos.y + top_offset);
     const ImVec2 p1(p0.x + width, p0.y + card_height);
     ImDrawList* dl = ImPlot::GetPlotDrawList();
     ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
