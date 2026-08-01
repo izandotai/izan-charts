@@ -208,6 +208,22 @@ struct VenueRaceLayer {
     std::vector<VenueRaceEntry> entries;
 };
 
+struct RtdsPriceLayer {
+    bool available = false;
+    std::string title = "RTDS";
+    std::string help;
+    double current_price = 0;
+    double chainlink_open_price = 0;
+    double beat_price = 0;
+    double official_gap_bps = 0;
+    double proxy_gap_bps = 0;
+    double current_age_ms = 0;
+    double reference_offset_ms = 0;
+    bool proxy_available = false;
+    bool direction_agrees = false;
+    bool reference_exact = false;
+};
+
 enum class LeverageRegime : std::uint8_t {
     Neutral,
     LongBuild,
@@ -274,6 +290,7 @@ public:
     ResearchOverlay research;
     ExpiryRiskLayer expiry_risk;
     VenueRaceLayer venue_race;
+    RtdsPriceLayer rtds_price;
     LeverageRegimeLayer leverage_regime;
     // A reference price line across the main pane (a strike, a mark —
     // 0 draws nothing). Set by the caller every frame.
@@ -295,6 +312,7 @@ private:
     void draw_expiry_risk_fan(const ImPlotRect& limits);
     void draw_expiry_risk_hud();
     void draw_venue_race_layer();
+    void draw_rtds_price_layer(const ImPlotRect& limits);
     void draw_leverage_regime_layer(const ImPlotRect& limits);
     void draw_last_price_tag();
     void update_view(const Series& s); // eased advance while following
