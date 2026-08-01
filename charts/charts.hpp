@@ -212,13 +212,16 @@ struct RtdsPriceLayer {
     bool available = false;
     std::string title = "RTDS";
     std::string help;
+    std::string source_key;
+    std::int64_t window_start_ns = 0;
     double current_price = 0;
-    double chainlink_open_price = 0;
     double beat_price = 0;
+    double pmt_reference_price = 0;
     double official_gap_bps = 0;
     double proxy_gap_bps = 0;
     double current_age_ms = 0;
     double reference_offset_ms = 0;
+    bool fresh = false;
     bool proxy_available = false;
     bool direction_agrees = false;
     bool reference_exact = false;
