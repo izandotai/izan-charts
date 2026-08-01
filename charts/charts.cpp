@@ -427,6 +427,469 @@ void Chart::pan_bars(double bars)
     manual_view_frames_ = 2;
 }
 
+static ImVec4 readable_overlay_accent(ImVec4 color)
+{
+    const ImVec4 background
+        = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+    const float luminance = background.x * 0.2126f
+        + background.y * 0.7152f + background.z * 0.0722f;
+    if (luminance > 0.55f) {
+        color.x *= 0.68f;
+        color.y *= 0.68f;
+        color.z *= 0.68f;
+    }
+    return color;
+}
+
+void Chart::draw_expiry_risk_fan(const ImPlotRect& limits)
+{
+    const auto& layer = expiry_risk;
+    if (!layer.available || !(layer.current_price > 0)
+        || !(layer.anchor_price > 0) || !(layer.expected_move_bps > 0)
+        || !(layer.end_t > layer.start_t))
+        return;
+    const double x0 = std::max(limits.X.Min, layer.start_t);
+    const double x1 = std::min(limits.X.Max, layer.end_t);
+    if (!(x1 > x0))
+        return;
+
+    constexpr int segments = 64;
+    const double duration = layer.end_t - layer.start_t;
+    const double sigma = layer.expected_move_bps / 10000.0;
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    const auto draw_adverse_boundary = [&](double multiplier, ImVec4 color,
+                                           float fill_alpha,
+                                           float line_alpha) {
+        std::vector<ImVec2> boundary;
+        std::vector<ImVec2> risky_boundary;
+        std::vector<ImVec2> risky_anchor;
+        boundary.reserve(segments + 1);
+        risky_boundary.reserve(segments + 1);
+        risky_anchor.reserve(segments + 1);
+        for (int index = 0; index <= segments; ++index) {
+            const double fraction = static_cast<double>(index) / segments;
+            const double x = x0 + (x1 - x0) * fraction;
+            const double remaining_fraction = std::clamp(
+                (layer.end_t - x) / duration, 0.0, 1.0);
+            const double move
+                = sigma * multiplier * std::sqrt(remaining_fraction);
+            const double adverse_price
+                = layer.current_price
+                * std::exp(layer.direction_up ? -move : move);
+            const ImVec2 point = ImPlot::PlotToPixels(x, adverse_price);
+            boundary.push_back(point);
+            const bool reaches_anchor
+                = layer.direction_up ? adverse_price <= layer.anchor_price
+                                     : adverse_price >= layer.anchor_price;
+            if (reaches_anchor) {
+                risky_boundary.push_back(point);
+                risky_anchor.push_back(
+                    ImPlot::PlotToPixels(x, layer.anchor_price));
+            }
+        }
+        color.w = line_alpha;
+        if (boundary.size() >= 2)
+            dl->AddPolyline(boundary.data(), static_cast<int>(boundary.size()),
+                ImGui::GetColorU32(color), ImDrawFlags_None, 1.25f);
+        if (risky_boundary.size() >= 2) {
+            std::vector<ImVec2> polygon;
+            polygon.reserve(risky_boundary.size() + risky_anchor.size());
+            polygon.insert(
+                polygon.end(), risky_boundary.begin(), risky_boundary.end());
+            polygon.insert(
+                polygon.end(), risky_anchor.rbegin(), risky_anchor.rend());
+            color.w = fill_alpha;
+            dl->AddConvexPolyFilled(polygon.data(),
+                static_cast<int>(polygon.size()), ImGui::GetColorU32(color));
+        }
+    };
+
+    draw_adverse_boundary(
+        2.0, readable_overlay_accent(
+                 ImVec4(0.98f, 0.68f, 0.16f, 1.0f)),
+        0.035f, 0.30f);
+    draw_adverse_boundary(
+        1.0, readable_overlay_accent(
+                 ImVec4(0.95f, 0.27f, 0.35f, 1.0f)),
+        0.085f, 0.72f);
+}
+
+void Chart::draw_expiry_risk_hud()
+{
+    const auto& layer = expiry_risk;
+    if (!layer.available)
+        return;
+    const ImVec2 plot_pos = ImPlot::GetPlotPos();
+    const ImVec2 plot_size = ImPlot::GetPlotSize();
+    if (plot_size.x < 260.0f || plot_size.y < 90.0f)
+        return;
+
+    const bool safe = layer.safety_distance >= 2.0;
+    const bool watch = layer.safety_distance >= 1.0;
+    const char* state = safe ? "SAFE" : (watch ? "WATCH" : "RISK");
+    ImVec4 accent = readable_overlay_accent(
+        safe ? theme.bull
+             : (watch ? ImVec4(0.98f, 0.68f, 0.16f, 1.0f)
+                      : theme.bear));
+    char text[256];
+    int used = std::snprintf(text, sizeof text,
+        "%s %s %.2fσ  |  T-%.0fs", layer.title.c_str(), state,
+        layer.safety_distance, std::max(0.0, layer.remaining_seconds));
+    if (layer.motion_available && used > 0
+        && used < static_cast<int>(sizeof text)) {
+        used += std::snprintf(text + used, sizeof text - used,
+            "  |  v5 %+.2fbp/s  a %+.2f", layer.velocity_5s_bps_per_second,
+            layer.acceleration_bps_per_second);
+    }
+    if (layer.giveback_available && used > 0
+        && used < static_cast<int>(sizeof text)) {
+        std::snprintf(text + used, sizeof text - used, "  |  giveback %.0f%%",
+            std::clamp(layer.giveback, 0.0, 9.99) * 100.0);
+    }
+
+    const ImVec2 text_size = ImGui::CalcTextSize(text);
+    const ImVec2 p0(plot_pos.x + 9.0f,
+        plot_pos.y + plot_size.y - text_size.y - 27.0f);
+    const ImVec2 p1(p0.x + text_size.x + 16.0f,
+        p0.y + text_size.y + 9.0f);
+    ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
+    background.w = 0.90f;
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(background), 4.0f);
+    accent.w = 0.90f;
+    dl->AddRect(p0, p1, ImGui::GetColorU32(accent), 4.0f);
+    dl->AddText(ImVec2(p0.x + 8.0f, p0.y + 4.0f),
+        ImGui::GetColorU32(accent), text);
+
+    if (layer.motion_available && layer.remaining_seconds > 0.0) {
+        const double horizon = std::min(15.0, layer.remaining_seconds);
+        const double projected = layer.current_price
+            * std::exp(layer.velocity_5s_bps_per_second * horizon / 10000.0);
+        const ImVec2 start
+            = ImPlot::PlotToPixels(layer.start_t, layer.current_price);
+        const ImVec2 end
+            = ImPlot::PlotToPixels(layer.start_t + horizon, projected);
+        const bool moving_away = layer.direction_up
+            ? layer.velocity_5s_bps_per_second >= 0.0
+            : layer.velocity_5s_bps_per_second <= 0.0;
+        ImVec4 motion = readable_overlay_accent(
+            moving_away ? theme.bull : theme.bear);
+        motion.w = 0.88f;
+        const ImU32 motion_color = ImGui::GetColorU32(motion);
+        dl->AddLine(start, end, motion_color, 2.0f);
+        const float dx = end.x - start.x;
+        const float dy = end.y - start.y;
+        const float length = std::sqrt(dx * dx + dy * dy);
+        if (length > 8.0f) {
+            const float ux = dx / length;
+            const float uy = dy / length;
+            const ImVec2 base(end.x - ux * 8.0f, end.y - uy * 8.0f);
+            const ImVec2 left(base.x - uy * 3.5f, base.y + ux * 3.5f);
+            const ImVec2 right(base.x + uy * 3.5f, base.y - ux * 3.5f);
+            dl->AddTriangleFilled(end, left, right, motion_color);
+        }
+    }
+
+    if (ImGui::IsMouseHoveringRect(p0, p1)) {
+        ImGui::SetNextWindowSizeConstraints(ImVec2(320.0f, 0.0f),
+            ImVec2(520.0f, std::numeric_limits<float>::max()));
+        ImGui::BeginTooltip();
+        ImGui::TextColored(accent, "%s", text);
+        if (!layer.help.empty()) {
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480.0f);
+            ImGui::TextWrapped("%s", layer.help.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::Separator();
+        ImGui::Text("Anchor %.2f  Current %.2f  adverse move +/-%.2fbp",
+            layer.anchor_price, layer.current_price, layer.expected_move_bps);
+        if (layer.motion_available)
+            ImGui::Text("v15 %+.2fbp/s  acceleration %+.2fbp/s",
+                layer.velocity_15s_bps_per_second,
+                layer.acceleration_bps_per_second);
+        ImGui::EndTooltip();
+    }
+}
+
+void Chart::draw_venue_race_layer()
+{
+    const auto& layer = venue_race;
+    if (!layer.available || layer.entries.empty())
+        return;
+    const ImVec2 plot_pos = ImPlot::GetPlotPos();
+    const ImVec2 plot_size = ImPlot::GetPlotSize();
+    const auto& style = ImGui::GetStyle();
+    const float text_height = ImGui::GetTextLineHeight();
+    const float padding_x = std::max(9.0f, style.FramePadding.x + 3.0f);
+    const float padding_y = std::max(5.0f, style.FramePadding.y + 1.0f);
+    const float row_height = std::ceil(
+        text_height + std::max(6.0f, style.ItemSpacing.y * 0.75f));
+    const float header_height = std::ceil(text_height + padding_y * 2.0f);
+    const auto format_value = [](char* destination, std::size_t size,
+                                  const auto& entry) {
+        if (entry.lead_lag_5s_available)
+            std::snprintf(destination, size, "%+.2fbp  L5 %+.2f",
+                entry.deviation_bps, entry.lead_lag_5s);
+        else
+            std::snprintf(destination, size, "%+.2fbp  L5 --",
+                entry.deviation_bps);
+    };
+    float label_width = 0.0f;
+    float value_width = 0.0f;
+    for (const auto& entry : layer.entries) {
+        label_width
+            = std::max(label_width, ImGui::CalcTextSize(entry.label.c_str()).x);
+        char value[96];
+        format_value(value, sizeof value, entry);
+        value_width = std::max(value_width, ImGui::CalcTextSize(value).x);
+    }
+    const float track_width = std::max(132.0f, text_height * 5.8f);
+    const float column_gap = std::max(10.0f, style.ItemSpacing.x);
+    char header_stats[96];
+    std::snprintf(header_stats, sizeof header_stats, "MAD %.2fbp  agree %.0f%%",
+        layer.consensus_mad_bps,
+        std::clamp(layer.agreement, 0.0, 1.0) * 100.0);
+    const float width = std::ceil(std::max(
+        padding_x * 2.0f + ImGui::CalcTextSize(layer.title.c_str()).x
+            + column_gap + ImGui::CalcTextSize(header_stats).x,
+        padding_x * 2.0f + label_width + column_gap + track_width
+            + column_gap + value_width));
+    const float card_height = header_height
+        + row_height * static_cast<float>(layer.entries.size()) + padding_y;
+    if (plot_size.x < width + 40.0f
+        || plot_size.y < card_height + 30.0f)
+        return;
+    const float top_offset
+        = research.available ? text_height + 32.0f : 8.0f;
+    const ImVec2 p0(
+        plot_pos.x + plot_size.x - width - 10.0f, plot_pos.y + top_offset);
+    const ImVec2 p1(p0.x + width, p0.y + card_height);
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
+    background.w = 0.68f;
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(background), 6.0f);
+    ImVec4 border = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+    border.w = 0.58f;
+    dl->AddRect(p0, p1, ImGui::GetColorU32(border), 6.0f);
+
+    ImVec4 header_fill = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+    header_fill.w = 0.34f;
+    dl->AddRectFilled(
+        p0, ImVec2(p1.x, p0.y + header_height),
+        ImGui::GetColorU32(header_fill), 6.0f, ImDrawFlags_RoundCornersTop);
+    const float header_text_y = p0.y + (header_height - text_height) * 0.5f;
+    dl->AddText(ImVec2(p0.x + padding_x, header_text_y),
+        ImGui::GetColorU32(ImGuiCol_Text), layer.title.c_str());
+    const float header_stats_width = ImGui::CalcTextSize(header_stats).x;
+    dl->AddText(
+        ImVec2(p1.x - padding_x - header_stats_width, header_text_y),
+        ImGui::GetColorU32(ImGuiCol_TextDisabled), header_stats);
+    dl->AddLine(ImVec2(p0.x + padding_x, p0.y + header_height),
+        ImVec2(p1.x - padding_x, p0.y + header_height),
+        ImGui::GetColorU32(border), 1.0f);
+
+    double scale = 1.0;
+    for (const auto& entry : layer.entries)
+        scale = std::max(scale, std::abs(entry.deviation_bps) * 1.15);
+    const float label_x = p0.x + padding_x;
+    const float track_min = label_x + label_width + column_gap;
+    const float track_max = track_min + track_width;
+    const float track_center = (track_min + track_max) * 0.5f;
+    const float track_half = (track_max - track_min) * 0.5f;
+    const float value_right = p1.x - padding_x;
+    const ImVec2 mouse = ImGui::GetMousePos();
+    for (std::size_t index = 0; index < layer.entries.size(); ++index) {
+        const auto& entry = layer.entries[index];
+        const float row_top
+            = p0.y + header_height + row_height * static_cast<float>(index);
+        const float y = row_top + row_height * 0.5f;
+        const float text_y = std::floor(y - text_height * 0.5f);
+        if (index % 2 == 1) {
+            ImVec4 row_fill = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+            row_fill.w = 0.16f;
+            dl->AddRectFilled(ImVec2(p0.x + 1.0f, row_top),
+                ImVec2(p1.x - 1.0f, row_top + row_height),
+                ImGui::GetColorU32(row_fill));
+        }
+        ImVec4 positive = readable_overlay_accent(theme.bull);
+        ImVec4 negative = readable_overlay_accent(theme.bear);
+        positive.w = negative.w = 0.14f;
+        const float track_half_height
+            = std::clamp(text_height * 0.28f, 5.0f, 8.0f);
+        dl->AddRectFilled(ImVec2(track_center, y - track_half_height),
+            ImVec2(track_max, y + track_half_height),
+            ImGui::GetColorU32(positive), 3.0f);
+        dl->AddRectFilled(ImVec2(track_min, y - track_half_height),
+            ImVec2(track_center, y + track_half_height),
+            ImGui::GetColorU32(negative), 3.0f);
+        dl->AddLine(ImVec2(track_center, y - track_half_height - 1.0f),
+            ImVec2(track_center, y + track_half_height + 1.0f),
+            ImGui::GetColorU32(ImGuiCol_TextDisabled), 1.0f);
+        const float normalized = static_cast<float>(
+            std::clamp(entry.deviation_bps / scale, -1.0, 1.0));
+        const float dot_x = track_center + normalized * track_half;
+        ImVec4 dot = readable_overlay_accent(
+            entry.deviation_bps >= 0.0 ? theme.bull : theme.bear);
+        dot.w = 0.95f;
+        dl->AddCircleFilled(ImVec2(dot_x, y), 4.0f, ImGui::GetColorU32(dot));
+        dl->AddText(ImVec2(label_x, text_y),
+            ImGui::GetColorU32(ImGuiCol_TextDisabled), entry.label.c_str());
+        char value[96];
+        format_value(value, sizeof value, entry);
+        const float value_text_width = ImGui::CalcTextSize(value).x;
+        dl->AddText(ImVec2(value_right - value_text_width, text_y),
+            ImGui::GetColorU32(dot), value);
+
+        const ImVec2 row0(p0.x, y - row_height * 0.5f);
+        const ImVec2 row1(p1.x, y + row_height * 0.5f);
+        if (mouse.x >= row0.x && mouse.x <= row1.x && mouse.y >= row0.y
+            && mouse.y <= row1.y) {
+            ImGui::SetNextWindowSizeConstraints(ImVec2(320.0f, 0.0f),
+                ImVec2(520.0f, std::numeric_limits<float>::max()));
+            ImGui::BeginTooltip();
+            ImGui::TextColored(dot, "%s  deviation %+.3fbp",
+                entry.label.c_str(), entry.deviation_bps);
+            ImGui::Text("Lead-lag correlation  1s %s  5s %s  15s %s",
+                entry.lead_lag_1s_available ? "available" : "--",
+                entry.lead_lag_5s_available ? "available" : "--",
+                entry.lead_lag_15s_available ? "available" : "--");
+            if (entry.lead_lag_1s_available)
+                ImGui::Text("1s  %+.3f", entry.lead_lag_1s);
+            if (entry.lead_lag_5s_available)
+                ImGui::Text("5s  %+.3f", entry.lead_lag_5s);
+            if (entry.lead_lag_15s_available)
+                ImGui::Text("15s %+.3f", entry.lead_lag_15s);
+            if (!layer.help.empty()) {
+                ImGui::Separator();
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480.0f);
+                ImGui::TextWrapped("%s", layer.help.c_str());
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::EndTooltip();
+        }
+    }
+}
+
+void Chart::draw_leverage_regime_layer(const ImPlotRect& limits)
+{
+    const auto& layer = leverage_regime;
+    if (!layer.available || layer.points.empty())
+        return;
+    const ImVec2 plot_pos = ImPlot::GetPlotPos();
+    const ImVec2 plot_size = ImPlot::GetPlotSize();
+    if (plot_size.x < 160.0f || plot_size.y < 80.0f)
+        return;
+    const float strip_top = plot_pos.y + plot_size.y - 9.0f;
+    const float strip_bottom = plot_pos.y + plot_size.y - 2.0f;
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    const auto color_for = [&](LeverageRegime regime) {
+        switch (regime) {
+        case LeverageRegime::LongBuild:
+            return readable_overlay_accent(
+                ImVec4(0.16f, 0.78f, 0.55f, 1.0f));
+        case LeverageRegime::ShortBuild:
+            return readable_overlay_accent(
+                ImVec4(0.94f, 0.29f, 0.38f, 1.0f));
+        case LeverageRegime::ShortCover:
+            return readable_overlay_accent(
+                ImVec4(0.23f, 0.63f, 0.96f, 1.0f));
+        case LeverageRegime::LongUnwind:
+            return readable_overlay_accent(
+                ImVec4(0.98f, 0.64f, 0.15f, 1.0f));
+        case LeverageRegime::Neutral:
+            return readable_overlay_accent(
+                ImVec4(0.55f, 0.58f, 0.66f, 1.0f));
+        }
+        return readable_overlay_accent(
+            ImVec4(0.55f, 0.58f, 0.66f, 1.0f));
+    };
+    const auto label_for = [](LeverageRegime regime) {
+        switch (regime) {
+        case LeverageRegime::LongBuild:
+            return "LONG BUILD";
+        case LeverageRegime::ShortBuild:
+            return "SHORT BUILD";
+        case LeverageRegime::ShortCover:
+            return "SHORT COVER";
+        case LeverageRegime::LongUnwind:
+            return "LONG UNWIND";
+        case LeverageRegime::Neutral:
+            return "NEUTRAL";
+        }
+        return "NEUTRAL";
+    };
+
+    const ImVec2 mouse = ImGui::GetMousePos();
+    const LeverageRegimePoint* hovered = nullptr;
+    for (std::size_t index = 0; index < layer.points.size(); ++index) {
+        const auto& point = layer.points[index];
+        const double end_t = index + 1 < layer.points.size()
+            ? layer.points[index + 1].t
+            : layer.through_t;
+        const double x0 = std::max(limits.X.Min, point.t);
+        const double x1 = std::min(limits.X.Max, end_t);
+        if (!(x1 > x0))
+            continue;
+        const float px0 = ImPlot::PlotToPixels(x0, limits.Y.Min).x;
+        const float px1 = ImPlot::PlotToPixels(x1, limits.Y.Min).x;
+        ImVec4 color = color_for(point.regime);
+        color.w = point.regime == LeverageRegime::Neutral
+            ? 0.08f
+            : static_cast<float>(
+                  0.22 + 0.58 * std::clamp(point.intensity, 0.0, 1.0));
+        dl->AddRectFilled(ImVec2(px0, strip_top),
+            ImVec2(std::max(px0 + 1.0f, px1), strip_bottom),
+            ImGui::GetColorU32(color));
+        if (mouse.x >= px0 && mouse.x <= px1 && mouse.y >= strip_top - 2.0f
+            && mouse.y <= strip_bottom + 2.0f)
+            hovered = &point;
+    }
+
+    const auto& latest = layer.points.back();
+    ImVec4 latest_color = color_for(latest.regime);
+    latest_color.w = 0.95f;
+    char badge[160];
+    std::snprintf(badge, sizeof badge, "%s %s  px %+.2fbp / OI %+.3f%%",
+        layer.title.c_str(), label_for(latest.regime),
+        latest.price_impulse_bps, latest.open_interest_delta_pct);
+    const ImVec2 text_size = ImGui::CalcTextSize(badge);
+    const ImVec2 badge0(plot_pos.x + plot_size.x - text_size.x - 25.0f,
+        strip_top - text_size.y - 9.0f);
+    const ImVec2 badge1(
+        badge0.x + text_size.x + 15.0f, badge0.y + text_size.y + 7.0f);
+    if (badge0.x > plot_pos.x + 280.0f) {
+        ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
+        background.w = 0.86f;
+        dl->AddRectFilled(
+            badge0, badge1, ImGui::GetColorU32(background), 3.0f);
+        dl->AddRect(
+            badge0, badge1, ImGui::GetColorU32(latest_color), 3.0f);
+        dl->AddText(ImVec2(badge0.x + 7.0f, badge0.y + 3.0f),
+            ImGui::GetColorU32(latest_color), badge);
+        if (ImGui::IsMouseHoveringRect(badge0, badge1))
+            hovered = &latest;
+    }
+
+    if (hovered) {
+        ImVec4 color = color_for(hovered->regime);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(320.0f, 0.0f),
+            ImVec2(520.0f, std::numeric_limits<float>::max()));
+        ImGui::BeginTooltip();
+        ImGui::TextColored(color, "%s %s", layer.title.c_str(),
+            label_for(hovered->regime));
+        ImGui::Text("Price impulse %+.3fbp", hovered->price_impulse_bps);
+        ImGui::Text(
+            "Open-interest change %+.4f%%", hovered->open_interest_delta_pct);
+        if (!layer.help.empty()) {
+            ImGui::Separator();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480.0f);
+            ImGui::TextWrapped("%s", layer.help.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::EndTooltip();
+    }
+}
+
 void Chart::draw_main_pane(
     const Series& s, const IndicatorSet& ind, bool bottom)
 {
@@ -551,6 +1014,7 @@ void Chart::draw_main_pane(
             draw_cone(1.0, 0.065f, 0.58f);
         }
     }
+    draw_expiry_risk_fan(lim);
     plot_candles("##candles", bars, bar_s, theme.bull, theme.bear);
     if (ind.ema_fast && !ind.ema_fast_v.empty())
         plot_line("##ema-fast", ind.x, ind.ema_fast_v, theme.ema_fast, 1.6f);
@@ -717,6 +1181,9 @@ void Chart::draw_main_pane(
         ImPlot::PlotInfLines("##refpx", &ref_price, 1, rs);
         ImPlot::TagY(ref_price, ref_color, "%.2f", ref_price);
     }
+    draw_leverage_regime_layer(lim);
+    draw_expiry_risk_hud();
+    draw_venue_race_layer();
 
     takeover_check();
     if (!follow_)

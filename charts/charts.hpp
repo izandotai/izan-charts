@@ -20,6 +20,7 @@
 #include <implot.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -164,6 +165,75 @@ struct ResearchOverlay {
     double cone_expected_move_bps = 0;
 };
 
+// Independent application-fed layers. Each layer is optional and has no
+// ownership of the market data that produced it, so one unavailable layer
+// cannot disturb candles, indicators, or another overlay.
+struct ExpiryRiskLayer {
+    bool available = false;
+    std::string title = "ANCHOR RISK";
+    std::string help;
+    double start_t = 0;
+    double end_t = 0;
+    double anchor_price = 0;
+    double current_price = 0;
+    double expected_move_bps = 0;
+    double safety_distance = 0;
+    double remaining_seconds = 0;
+    bool direction_up = false;
+    bool motion_available = false;
+    double velocity_5s_bps_per_second = 0;
+    double velocity_15s_bps_per_second = 0;
+    double acceleration_bps_per_second = 0;
+    bool giveback_available = false;
+    double giveback = 0;
+};
+
+struct VenueRaceEntry {
+    std::string label;
+    double deviation_bps = 0;
+    double lead_lag_1s = 0;
+    double lead_lag_5s = 0;
+    double lead_lag_15s = 0;
+    bool lead_lag_1s_available = false;
+    bool lead_lag_5s_available = false;
+    bool lead_lag_15s_available = false;
+};
+
+struct VenueRaceLayer {
+    bool available = false;
+    std::string title = "VENUE RACE";
+    std::string help;
+    double consensus_mad_bps = 0;
+    double agreement = 0;
+    std::vector<VenueRaceEntry> entries;
+};
+
+enum class LeverageRegime : std::uint8_t {
+    Neutral,
+    LongBuild,
+    ShortBuild,
+    ShortCover,
+    LongUnwind,
+};
+
+struct LeverageRegimePoint {
+    double t = 0;
+    LeverageRegime regime = LeverageRegime::Neutral;
+    double intensity = 0;
+    double price_impulse_bps = 0;
+    double open_interest_delta_pct = 0;
+};
+
+struct LeverageRegimeLayer {
+    bool available = false;
+    std::string title = "PRICE x OI";
+    std::string help;
+    std::string source_key;
+    std::uint64_t source_revision = 0;
+    double through_t = 0;
+    std::vector<LeverageRegimePoint> points;
+};
+
 class Chart {
 public:
     // Draw the full multi-pane chart inside the current ImGui window
@@ -202,6 +272,9 @@ public:
     std::vector<Marker> markers; // refilled by the caller every frame
     std::optional<AuxiliaryPane> auxiliary;
     ResearchOverlay research;
+    ExpiryRiskLayer expiry_risk;
+    VenueRaceLayer venue_race;
+    LeverageRegimeLayer leverage_regime;
     // A reference price line across the main pane (a strike, a mark —
     // 0 draws nothing). Set by the caller every frame.
     double ref_price = 0;
@@ -219,6 +292,10 @@ private:
     void draw_rsi_pane(const Series& s, const IndicatorSet& ind);
     void draw_atr_pane(const Series& s, const IndicatorSet& ind);
     void draw_auxiliary_pane(const Series& s, const AuxiliaryPane& pane);
+    void draw_expiry_risk_fan(const ImPlotRect& limits);
+    void draw_expiry_risk_hud();
+    void draw_venue_race_layer();
+    void draw_leverage_regime_layer(const ImPlotRect& limits);
     void draw_last_price_tag();
     void update_view(const Series& s); // eased advance while following
     void takeover_check();             // drag/scroll → the user takes over
