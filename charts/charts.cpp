@@ -111,6 +111,59 @@ namespace {
         }
     }
 
+    void compute_rsi(
+        const std::vector<Bar>& bars, int n, std::vector<double>& out)
+    {
+        out.assign(bars.size(), kNaN);
+        if (n <= 0 || bars.size() <= static_cast<std::size_t>(n))
+            return;
+        double gain = 0, loss = 0;
+        for (int i = 1; i <= n; ++i) {
+            const double change = bars[static_cast<std::size_t>(i)].c
+                - bars[static_cast<std::size_t>(i - 1)].c;
+            gain += std::max(0.0, change);
+            loss += std::max(0.0, -change);
+        }
+        gain /= n;
+        loss /= n;
+        const auto value = [](double g, double l) {
+            if (l <= 0)
+                return g <= 0 ? 50.0 : 100.0;
+            return 100.0 - 100.0 / (1.0 + g / l);
+        };
+        out[static_cast<std::size_t>(n)] = value(gain, loss);
+        for (std::size_t i = static_cast<std::size_t>(n + 1);
+             i < bars.size(); ++i) {
+            const double change = bars[i].c - bars[i - 1].c;
+            gain = (gain * (n - 1) + std::max(0.0, change)) / n;
+            loss = (loss * (n - 1) + std::max(0.0, -change)) / n;
+            out[i] = value(gain, loss);
+        }
+    }
+
+    void compute_atr(
+        const std::vector<Bar>& bars, int n, std::vector<double>& out)
+    {
+        out.assign(bars.size(), kNaN);
+        if (n <= 0 || bars.size() <= static_cast<std::size_t>(n))
+            return;
+        std::vector<double> tr(bars.size(), 0);
+        for (std::size_t i = 1; i < bars.size(); ++i)
+            tr[i] = std::max({ bars[i].h - bars[i].l,
+                std::fabs(bars[i].h - bars[i - 1].c),
+                std::fabs(bars[i].l - bars[i - 1].c) });
+        double value = 0;
+        for (int i = 1; i <= n; ++i)
+            value += tr[static_cast<std::size_t>(i)];
+        value /= n;
+        out[static_cast<std::size_t>(n)] = value;
+        for (std::size_t i = static_cast<std::size_t>(n + 1);
+             i < bars.size(); ++i) {
+            value = (value * (n - 1) + tr[i]) / n;
+            out[i] = value;
+        }
+    }
+
 }
 
 void IndicatorSet::compute(const std::vector<Bar>& bars)
@@ -137,6 +190,17 @@ void IndicatorSet::compute(const std::vector<Bar>& bars)
             boll_dn[i] = boll_mid[i] - boll_k * sd[i];
         }
     }
+    if (vwap) {
+        vwap_v.assign(bars.size(), kNaN);
+        double notional = 0, volume_sum = 0;
+        for (std::size_t i = 0; i < bars.size(); ++i) {
+            const double typical = (bars[i].h + bars[i].l + bars[i].c) / 3.0;
+            notional += typical * bars[i].v;
+            volume_sum += bars[i].v;
+            if (volume_sum > 0)
+                vwap_v[i] = notional / volume_sum;
+        }
+    }
     if (macd) {
         std::vector<double> f, s;
         ema(bars, macd_fast, f);
@@ -151,6 +215,10 @@ void IndicatorSet::compute(const std::vector<Bar>& bars)
             if (!std::isnan(macd_dif[i]) && !std::isnan(macd_dea[i]))
                 macd_hist[i] = (macd_dif[i] - macd_dea[i]) * 2.0;
     }
+    if (rsi)
+        compute_rsi(bars, rsi_n, rsi_v);
+    if (atr)
+        compute_atr(bars, atr_n, atr_v);
 }
 
 // ---------- drawing primitives ----------
@@ -304,6 +372,9 @@ void Chart::update_view(const Series& s)
     if (bars.empty())
         return;
     const double bar_s = s.bar_seconds();
+    bar_seconds_ = bar_s;
+    data_span_ = std::max(
+        bar_s, bars.back().t + bar_s - bars.front().t);
     if (span_ <= 0)
         span_ = bar_s * 120; // 120 bars per screen by default
     const float dt = ImGui::GetIO().DeltaTime;
@@ -326,6 +397,36 @@ void Chart::update_view(const Series& s)
     vx1_ += (tx1 - vx1_) * alpha;
 }
 
+void Chart::zoom(double factor)
+{
+    if (!(factor > 0) || span_ <= 0)
+        return;
+    const double minimum = bar_seconds_ * 12.0;
+    const double maximum
+        = std::max(minimum, data_span_ + bar_seconds_ * 12.0);
+    const double next = std::clamp(span_ * factor, minimum, maximum);
+    const double anchor = follow_ ? vx1_ : (vx0_ + vx1_) * 0.5;
+    span_ = next;
+    if (follow_)
+        vx0_ = vx1_ - span_;
+    else {
+        vx0_ = anchor - span_ * 0.5;
+        vx1_ = anchor + span_ * 0.5;
+        manual_view_frames_ = 2;
+    }
+}
+
+void Chart::pan_bars(double bars)
+{
+    if (span_ <= 0)
+        return;
+    follow_ = false;
+    const double delta = bars * bar_seconds_;
+    vx0_ += delta;
+    vx1_ += delta;
+    manual_view_frames_ = 2;
+}
+
 void Chart::draw_main_pane(
     const Series& s, const IndicatorSet& ind, bool bottom)
 {
@@ -339,7 +440,7 @@ void Chart::draw_main_pane(
     // text but the crosshair readout still goes through the formatter
     // — hovering shows HH:MM:SS, not raw seconds.
     ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
-    if (follow_ && !bars.empty()) {
+    if ((follow_ || manual_view_frames_ > 0) && !bars.empty()) {
         // Y fits the visible candles plus visible indicators only (the
         // TV semantic), exponentially eased.
         double lo = 1e300, hi = -1e300;
@@ -367,7 +468,8 @@ void Chart::draw_main_pane(
             vy1_ += (ty1 - vy1_) * alpha;
         }
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
-        ImPlot::SetupAxisLimits(ImAxis_Y1, vy0_, vy1_, ImGuiCond_Always);
+        if (follow_)
+            ImPlot::SetupAxisLimits(ImAxis_Y1, vy0_, vy1_, ImGuiCond_Always);
     }
 
     // The Bollinger band is laid first; lines and candles go on top.
@@ -381,6 +483,24 @@ void Chart::draw_main_pane(
         plot_line("##boll-dn", ind.x, ind.boll_dn, theme.boll, 1.0f);
         plot_line("##boll-mid", ind.x, ind.boll_mid, theme.boll, 1.0f);
     }
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    const ImPlotRect lim = ImPlot::GetPlotLimits();
+    if (research.available && research.anchor_price > 0
+        && research.expected_move_bps > 0) {
+        const double move
+            = research.anchor_price * research.expected_move_bps / 10000.0;
+        const double x0 = std::max(lim.X.Min, research.window_start_t);
+        const double x1 = std::min(lim.X.Max, research.window_end_t);
+        if (x1 > x0) {
+            const ImVec2 p0
+                = ImPlot::PlotToPixels(x0, research.anchor_price + move);
+            const ImVec2 p1
+                = ImPlot::PlotToPixels(x1, research.anchor_price - move);
+            ImVec4 fill = ref_color;
+            fill.w = 0.07f;
+            dl->AddRectFilled(p0, p1, ImGui::GetColorU32(fill));
+        }
+    }
     plot_candles("##candles", bars, bar_s, theme.bull, theme.bear);
     if (ind.ema_fast && !ind.ema_fast_v.empty())
         plot_line("##ema-fast", ind.x, ind.ema_fast_v, theme.ema_fast, 1.6f);
@@ -388,9 +508,9 @@ void Chart::draw_main_pane(
         plot_line("##ema-slow", ind.x, ind.ema_slow_v, theme.ema_slow, 1.6f);
     if (ind.sma && !ind.sma_v.empty())
         plot_line("##sma", ind.x, ind.sma_v, theme.sma, 1.4f);
-
-    ImDrawList* dl = ImPlot::GetPlotDrawList();
-    const ImPlotRect lim = ImPlot::GetPlotLimits();
+    if (ind.vwap && !ind.vwap_v.empty())
+        plot_line("VWAP", ind.x, ind.vwap_v,
+            ImVec4(0.86f, 0.45f, 0.93f, 1.0f), 1.5f);
 
     // The last-price dashed line and its right-edge tag.
     if (!bars.empty()) {
@@ -452,10 +572,39 @@ void Chart::draw_main_pane(
                 off += std::snprintf(line2 + off, sizeof line2 - off,
                     "BOLL %.2f/%.2f/%.2f", ind.boll_up[ri], ind.boll_mid[ri],
                     ind.boll_dn[ri]);
+            if (ind.vwap && ri < ind.vwap_v.size()
+                && !std::isnan(ind.vwap_v[ri]))
+                off += std::snprintf(line2 + off, sizeof line2 - off,
+                    "  VWAP %.2f", ind.vwap_v[ri]);
             if (off > 0)
                 dl->AddText(ImVec2(pos.x + 10.0f, ty),
                     ImGui::GetColorU32(ImGuiCol_TextDisabled), line2);
         }
+    }
+
+    if (research.available) {
+        char buf[256];
+        std::snprintf(buf, sizeof buf,
+            "RESEARCH %s  Fair UP %.1f%%  Market %.1f%%  Edge %+.1fpp  "
+            "Conf %.0f%%  EM +/-%.1fbp",
+            research.horizon.c_str(), research.fair_probability_up * 100.0,
+            research.market_probability_up * 100.0, research.edge_up * 100.0,
+            research.confidence * 100.0, research.expected_move_bps);
+        const ImVec2 pos = ImPlot::GetPlotPos();
+        const ImVec2 text_size = ImGui::CalcTextSize(buf);
+        const ImVec2 plot_size = ImPlot::GetPlotSize();
+        const ImVec2 p0(pos.x + plot_size.x - text_size.x - 24.0f,
+            pos.y + 8.0f);
+        const ImVec2 p1(
+            p0.x + text_size.x + 16.0f, p0.y + text_size.y + 10.0f);
+        ImVec4 overlay_background =
+            ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
+        overlay_background.w = 0.94f;
+        dl->AddRectFilled(
+            p0, p1, ImGui::GetColorU32(overlay_background), 4.0f);
+        dl->AddRect(p0, p1, ImGui::GetColorU32(ref_color), 4.0f);
+        dl->AddText(ImVec2(p0.x + 8.0f, p0.y + 5.0f),
+            ImGui::GetColorU32(ImGuiCol_Text), buf);
     }
 
     // The marker layer — the caller refills `markers` every frame.
@@ -517,6 +666,8 @@ void Chart::draw_main_pane(
     takeover_check();
     if (!follow_)
         span_ = lim.X.Max - lim.X.Min;
+    if (manual_view_frames_ > 0)
+        --manual_view_frames_;
 }
 
 void Chart::draw_volume_pane(
@@ -545,7 +696,7 @@ void Chart::draw_volume_pane(
         if (vmax > 0)
             ImPlot::SetupAxisLimits(ImAxis_Y1, 0, vmax, ImGuiCond_Always);
     }
-    if (follow_)
+    if (follow_ || manual_view_frames_ > 0)
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
     plot_volume("##vol", s.bars(), s.bar_seconds(), theme.bull, theme.bear);
     takeover_check();
@@ -557,7 +708,7 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
         ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite
             | ImPlotAxisFlags_AutoFit);
     ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
-    if (follow_)
+    if (follow_ || manual_view_frames_ > 0)
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
     plot_hist("##macd-hist", ind.x, ind.macd_hist, s.bar_seconds(), theme.bull,
         theme.bear);
@@ -590,6 +741,68 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
     takeover_check();
 }
 
+void Chart::draw_rsi_pane(const Series& s, const IndicatorSet& ind)
+{
+    ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoLabel,
+        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite);
+    ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
+    ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 100, ImGuiCond_Always);
+    if (follow_ || manual_view_frames_ > 0)
+        ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
+    plot_line("RSI", ind.x, ind.rsi_v,
+        ImVec4(0.73f, 0.41f, 0.78f, 1.0f), 1.5f);
+    const double guides[] = { 30, 50, 70 };
+    ImPlotSpec spec;
+    spec.LineColor = ImVec4(0.55f, 0.58f, 0.66f, 0.45f);
+    spec.LineWeight = 1.0f;
+    spec.Flags = ImPlotInfLinesFlags_Horizontal;
+    ImPlot::PlotInfLines("##rsi-guides", guides, 3, spec);
+    takeover_check();
+}
+
+void Chart::draw_atr_pane(const Series& s, const IndicatorSet& ind)
+{
+    ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoLabel,
+        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite
+            | ImPlotAxisFlags_AutoFit);
+    ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
+    if (follow_ || manual_view_frames_ > 0)
+        ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
+    plot_line("ATR", ind.x, ind.atr_v,
+        ImVec4(0.95f, 0.65f, 0.20f, 1.0f), 1.5f);
+    takeover_check();
+}
+
+void Chart::draw_auxiliary_pane(const Series&, const AuxiliaryPane& pane)
+{
+    ImPlotAxisFlags yflags
+        = ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite;
+    if (!(pane.y_max > pane.y_min))
+        yflags |= ImPlotAxisFlags_AutoFit;
+    ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoLabel, yflags);
+    ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
+    if (pane.y_max > pane.y_min)
+        ImPlot::SetupAxisLimits(
+            ImAxis_Y1, pane.y_min, pane.y_max, ImGuiCond_Always);
+    if (follow_ || manual_view_frames_ > 0)
+        ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
+    for (const auto& line : pane.lines)
+        plot_line(line.label.c_str(), line.x, line.y, line.color, 1.5f);
+    if (!pane.guides.empty()) {
+        ImPlotSpec spec;
+        spec.LineColor = ImVec4(0.55f, 0.58f, 0.66f, 0.45f);
+        spec.LineWeight = 1.0f;
+        spec.Flags = ImPlotInfLinesFlags_Horizontal;
+        ImPlot::PlotInfLines("##guides", pane.guides.data(),
+            static_cast<int>(pane.guides.size()), spec);
+    }
+    const ImVec2 pos = ImPlot::GetPlotPos();
+    ImPlot::GetPlotDrawList()->AddText(
+        ImVec2(pos.x + 10.0f, pos.y + 6.0f),
+        ImGui::GetColorU32(ImGuiCol_TextDisabled), pane.title.c_str());
+    takeover_check();
+}
+
 void Chart::draw(
     const char* id, const Series& series, IndicatorSet& ind, const ImVec2& size)
 {
@@ -609,23 +822,19 @@ void Chart::draw(
     }
 
     // Pane count and ratios — the TV default layout.
-    int rows = 1;
-    float ratios_buf[3] = { 1.0f, 0, 0 };
-    if (ind.volume && ind.macd) {
-        rows = 3;
-        ratios_buf[0] = 0.60f;
-        ratios_buf[1] = 0.14f;
-        ratios_buf[2] = 0.26f;
-    } else if (ind.volume || ind.macd) {
-        rows = 2;
-        ratios_buf[0] = 0.72f;
-        ratios_buf[1] = 0.28f;
-    }
+    const int indicator_rows = (ind.volume ? 1 : 0) + (ind.macd ? 1 : 0)
+        + (ind.rsi ? 1 : 0) + (ind.atr ? 1 : 0)
+        + (auxiliary && !auxiliary->lines.empty() ? 1 : 0);
+    const int rows = 1 + indicator_rows;
+    std::vector<float> ratios_buf(static_cast<std::size_t>(rows),
+        indicator_rows == 0 ? 1.0f : 0.18f);
+    if (indicator_rows > 0)
+        ratios_buf[0] = std::max(0.46f, 1.0f - indicator_rows * 0.18f);
 
     const ImPlotSubplotFlags sflags = ImPlotSubplotFlags_LinkAllX
-        | ImPlotSubplotFlags_NoTitle | ImPlotSubplotFlags_NoResize
-        | ImPlotSubplotFlags_NoMenus;
-    if (ImPlot::BeginSubplots(id, rows, 1, size, sflags, ratios_buf)) {
+        | ImPlotSubplotFlags_NoTitle | ImPlotSubplotFlags_NoMenus;
+    if (ImPlot::BeginSubplots(
+            id, rows, 1, size, sflags, ratios_buf.data())) {
         const ImPlotFlags pflags = ImPlotFlags_Crosshairs | ImPlotFlags_NoLegend
             | ImPlotFlags_NoBoxSelect | ImPlotFlags_NoMenus
             | ImPlotFlags_NoTitle;
@@ -635,11 +844,27 @@ void Chart::draw(
         }
         if (ind.volume
             && ImPlot::BeginPlot("##volume", ImVec2(-1, 0), pflags)) {
-            draw_volume_pane(series, ind, !ind.macd, switched);
+            draw_volume_pane(series, ind,
+                !ind.macd && !ind.rsi && !ind.atr
+                    && (!auxiliary || auxiliary->lines.empty()),
+                switched);
             ImPlot::EndPlot();
         }
         if (ind.macd && ImPlot::BeginPlot("##macd", ImVec2(-1, 0), pflags)) {
             draw_macd_pane(series, ind);
+            ImPlot::EndPlot();
+        }
+        if (ind.rsi && ImPlot::BeginPlot("##rsi", ImVec2(-1, 0), pflags)) {
+            draw_rsi_pane(series, ind);
+            ImPlot::EndPlot();
+        }
+        if (ind.atr && ImPlot::BeginPlot("##atr", ImVec2(-1, 0), pflags)) {
+            draw_atr_pane(series, ind);
+            ImPlot::EndPlot();
+        }
+        if (auxiliary && !auxiliary->lines.empty()
+            && ImPlot::BeginPlot("##auxiliary", ImVec2(-1, 0), pflags)) {
+            draw_auxiliary_pane(series, *auxiliary);
             ImPlot::EndPlot();
         }
         ImPlot::EndSubplots();
