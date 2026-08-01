@@ -20,6 +20,8 @@
 #include <implot.h>
 
 #include <cstddef>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace izan::charts {
@@ -75,21 +77,27 @@ struct IndicatorSet {
     bool ema_slow = true; // EMA26
     bool sma = false;     // SMA20
     bool boll = true;     // BOLL(20, 2σ)
+    bool vwap = false;    // session/backfill anchored VWAP
     bool volume = true;   // volume pane
     bool macd = true;     // MACD(12,26,9) pane
+    bool rsi = false;     // RSI(14) pane
+    bool atr = false;     // ATR(14) pane
 
     // Parameters.
     int ema_fast_n = 12, ema_slow_n = 26, sma_n = 20;
     int boll_n = 20;
     double boll_k = 2.0;
     int macd_fast = 12, macd_slow = 26, macd_signal = 9;
+    int rsi_n = 14, atr_n = 14;
 
     // Results, index-aligned with the bars; NAN marks the not-enough-
     // data prefix and implot breaks the line there by itself.
     std::vector<double> x;
     std::vector<double> ema_fast_v, ema_slow_v, sma_v;
     std::vector<double> boll_mid, boll_up, boll_dn;
+    std::vector<double> vwap_v;
     std::vector<double> macd_dif, macd_dea, macd_hist;
+    std::vector<double> rsi_v, atr_v;
 
     void compute(const std::vector<Bar>& bars);
 };
@@ -118,6 +126,37 @@ struct Marker {
     ImVec4 color { 1, 1, 1, 1 };
     float size = 7.0f;
     const char* legend = ""; // markers sharing a legend form a group
+};
+
+struct AuxiliaryLine {
+    std::string label;
+    std::vector<double> x;
+    std::vector<double> y;
+    ImVec4 color { 1, 1, 1, 1 };
+};
+
+// One application-defined, time-linked indicator pane. The chart owns no
+// market-data semantics; callers can feed CVD, leverage, volatility, research,
+// or another bounded history.
+struct AuxiliaryPane {
+    std::string title;
+    std::vector<AuxiliaryLine> lines;
+    std::vector<double> guides;
+    double y_min = 0;
+    double y_max = 0;
+};
+
+struct ResearchOverlay {
+    bool available = false;
+    std::string horizon;
+    double window_start_t = 0;
+    double window_end_t = 0;
+    double anchor_price = 0;
+    double expected_move_bps = 0;
+    double fair_probability_up = 0;
+    double market_probability_up = 0;
+    double edge_up = 0;
+    double confidence = 0;
 };
 
 class Chart {
@@ -151,8 +190,13 @@ public:
         set_follow(true);
     }
 
+    void zoom(double factor);
+    void pan_bars(double bars);
+
     Theme theme;
     std::vector<Marker> markers; // refilled by the caller every frame
+    std::optional<AuxiliaryPane> auxiliary;
+    ResearchOverlay research;
     // A reference price line across the main pane (a strike, a mark —
     // 0 draws nothing). Set by the caller every frame.
     double ref_price = 0;
@@ -167,13 +211,19 @@ private:
     void draw_volume_pane(
         const Series& s, const IndicatorSet& ind, bool bottom, bool switched);
     void draw_macd_pane(const Series& s, const IndicatorSet& ind);
+    void draw_rsi_pane(const Series& s, const IndicatorSet& ind);
+    void draw_atr_pane(const Series& s, const IndicatorSet& ind);
+    void draw_auxiliary_pane(const Series& s, const AuxiliaryPane& pane);
     void update_view(const Series& s); // eased advance while following
     void takeover_check();             // drag/scroll → the user takes over
 
     bool follow_ = true;
     int snap_frames_ = 0; // >0: the seamless-switch window, all teleports
+    int manual_view_frames_ = 0;
     const Series* last_series_ = nullptr; // source-switch detection
     double span_ = 0;          // viewport width in seconds; 0 = unset
+    double bar_seconds_ = 60;
+    double data_span_ = 60;
     double vx0_ = 0, vx1_ = 0; // eased viewport, X shared by all panes
     double vy0_ = 0, vy1_ = 0; // main-pane Y easing state
 };
