@@ -611,6 +611,138 @@ void Chart::draw_expiry_risk_hud()
     }
 }
 
+void Chart::draw_rtds_price_layer(const ImPlotRect& limits)
+{
+    const auto& layer = rtds_price;
+    if (!layer.available || !(layer.current_price > 0))
+        return;
+    const ImVec2 plot_pos = ImPlot::GetPlotPos();
+    const ImVec2 plot_size = ImPlot::GetPlotSize();
+    if (plot_size.x < 320.0f || plot_size.y < 100.0f)
+        return;
+
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    ImVec4 current_color
+        = readable_overlay_accent(ImVec4(0.22f, 0.74f, 0.96f, 1.0f));
+    const bool above_beat
+        = layer.beat_price > 0 && layer.current_price >= layer.beat_price;
+    ImVec4 direction_color = readable_overlay_accent(
+        above_beat ? theme.bull : theme.bear);
+
+    if (layer.beat_price > 0) {
+        const ImVec2 beat_left
+            = ImPlot::PlotToPixels(limits.X.Min, layer.beat_price);
+        const ImVec2 beat_right
+            = ImPlot::PlotToPixels(limits.X.Max, layer.beat_price);
+        const ImVec2 current_left
+            = ImPlot::PlotToPixels(limits.X.Min, layer.current_price);
+        const ImVec2 current_right
+            = ImPlot::PlotToPixels(limits.X.Max, layer.current_price);
+        direction_color.w = 0.055f;
+        dl->AddRectFilled(
+            ImVec2(beat_left.x, std::min(beat_left.y, current_left.y)),
+            ImVec2(beat_right.x, std::max(beat_right.y, current_right.y)),
+            ImGui::GetColorU32(direction_color));
+
+        ImPlotSpec beat_line;
+        beat_line.LineColor = ref_color;
+        beat_line.LineWeight = 1.25f;
+        beat_line.Flags = ImPlotInfLinesFlags_Horizontal;
+        ImPlot::PlotInfLines(
+            "##rtds-beat", &layer.beat_price, 1, beat_line);
+        ImPlot::TagY(layer.beat_price, ref_color,
+            "BEAT %.2f", layer.beat_price);
+    }
+
+    ImPlotSpec current_line;
+    current_line.LineColor = current_color;
+    current_line.LineWeight = 1.6f;
+    current_line.Flags = ImPlotInfLinesFlags_Horizontal;
+    ImPlot::PlotInfLines(
+        "##rtds-current", &layer.current_price, 1, current_line);
+    ImPlot::TagY(layer.current_price, current_color,
+        "RTDS %.2f", layer.current_price);
+
+    if (layer.chainlink_open_price > 0) {
+        ImVec4 open_color = current_color;
+        open_color.w = 0.52f;
+        const float x1 = plot_pos.x + plot_size.x - 6.0f;
+        const float x0 = std::max(plot_pos.x + 6.0f, x1 - 112.0f);
+        const float y = ImPlot::PlotToPixels(
+            limits.X.Max, layer.chainlink_open_price).y;
+        for (float x = x0; x < x1; x += 9.0f)
+            dl->AddLine(ImVec2(x, y), ImVec2(std::min(x + 5.0f, x1), y),
+                ImGui::GetColorU32(open_color), 1.0f);
+        const char* open_label = "CL OPEN";
+        const ImVec2 label_size = ImGui::CalcTextSize(open_label);
+        dl->AddText(ImVec2(x0 - label_size.x - 6.0f,
+                        y - label_size.y * 0.5f),
+            ImGui::GetColorU32(open_color), open_label);
+    }
+
+    const double beat_delta = layer.beat_price > 0
+        ? layer.current_price - layer.beat_price
+        : 0.0;
+    const double beat_gap_bps = layer.beat_price > 0
+        ? std::log(layer.current_price / layer.beat_price) * 10000.0
+        : 0.0;
+    char text[320];
+    if (layer.beat_price > 0) {
+        std::snprintf(text, sizeof text,
+            "%s %s  %.2f  |  BEAT %.2f  |  %+.2f USD / %+.2fbp  |  %.0fms",
+            layer.title.c_str(), above_beat ? "UP" : "DOWN",
+            layer.current_price, layer.beat_price, beat_delta, beat_gap_bps,
+            std::max(0.0, layer.current_age_ms));
+    } else {
+        std::snprintf(text, sizeof text,
+            "%s  NOW %.2f  BEAT N/A  %.0fms", layer.title.c_str(),
+            layer.current_price, std::max(0.0, layer.current_age_ms));
+    }
+    ImVec2 text_size = ImGui::CalcTextSize(text);
+    if (text_size.x > plot_size.x - 36.0f && layer.beat_price > 0) {
+        std::snprintf(text, sizeof text,
+            "%s %s %.2f | B %.2f | %+.2fbp",
+            layer.title.c_str(), above_beat ? "UP" : "DOWN",
+            layer.current_price, layer.beat_price, beat_gap_bps);
+        text_size = ImGui::CalcTextSize(text);
+    }
+    const ImVec2 p0(plot_pos.x + 10.0f,
+        plot_pos.y + ImGui::GetTextLineHeightWithSpacing() * 2.0f + 10.0f);
+    const ImVec2 p1(p0.x + text_size.x + 16.0f,
+        p0.y + text_size.y + 9.0f);
+    ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
+    background.w = 0.82f;
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(background), 4.0f);
+    current_color.w = 0.88f;
+    dl->AddRect(p0, p1, ImGui::GetColorU32(current_color), 4.0f);
+    dl->AddText(ImVec2(p0.x + 8.0f, p0.y + 4.0f),
+        ImGui::GetColorU32(current_color), text);
+
+    if (ImGui::IsMouseHoveringRect(p0, p1)) {
+        ImGui::SetNextWindowSizeConstraints(ImVec2(340.0f, 0.0f),
+            ImVec2(560.0f, std::numeric_limits<float>::max()));
+        ImGui::BeginTooltip();
+        ImGui::TextColored(current_color, "%s", text);
+        if (!layer.help.empty()) {
+            ImGui::Separator();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 500.0f);
+            ImGui::TextWrapped("%s", layer.help.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        if (layer.chainlink_open_price > 0)
+            ImGui::Text("Chainlink open %.8g  official gap %+.3fbp",
+                layer.chainlink_open_price, layer.official_gap_bps);
+        if (layer.proxy_available)
+            ImGui::Text("Proxy %+.3fbp  direction %s",
+                layer.proxy_gap_bps,
+                layer.direction_agrees ? "AGREE" : "DIVERGE");
+        ImGui::Text("Chainlink reference %s  offset %+.0fms",
+            layer.reference_exact ? "EXACT" : "APPROX",
+            layer.reference_offset_ms);
+        ImGui::EndTooltip();
+    }
+}
+
 void Chart::draw_venue_race_layer()
 {
     const auto& layer = venue_race;
@@ -660,7 +792,8 @@ void Chart::draw_venue_race_layer()
         || plot_size.y < card_height + 30.0f)
         return;
     const float top_offset
-        = research.available ? text_height + 32.0f : 8.0f;
+        = (research.available ? text_height + 32.0f : 8.0f)
+        + (rtds_price.available ? text_height + 34.0f : 0.0f);
     const ImVec2 p0(plot_pos.x + 10.0f, plot_pos.y + top_offset);
     const ImVec2 p1(p0.x + width, p0.y + card_height);
     ImDrawList* dl = ImPlot::GetPlotDrawList();
@@ -1172,7 +1305,9 @@ void Chart::draw_main_pane(
 
     // The reference line: hairline across the pane, tagged on the
     // price axis.
-    if (ref_price > 0) {
+    const bool rtds_owns_reference = rtds_price.available
+        && rtds_price.beat_price > 0;
+    if (ref_price > 0 && !rtds_owns_reference) {
         ImPlotSpec rs;
         rs.LineColor = ref_color;
         rs.LineWeight = 1.0f;
@@ -1180,6 +1315,7 @@ void Chart::draw_main_pane(
         ImPlot::PlotInfLines("##refpx", &ref_price, 1, rs);
         ImPlot::TagY(ref_price, ref_color, "%.2f", ref_price);
     }
+    draw_rtds_price_layer(lim);
     draw_leverage_regime_layer(lim);
     draw_expiry_risk_hud();
     draw_venue_race_layer();
