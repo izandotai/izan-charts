@@ -501,6 +501,56 @@ void Chart::draw_main_pane(
             dl->AddRectFilled(p0, p1, ImGui::GetColorU32(fill));
         }
     }
+    if (research.dynamic_cone_enabled && research.cone_center_price > 0
+        && research.cone_expected_move_bps > 0
+        && research.cone_end_t > research.cone_start_t) {
+        const double x0 = std::max(lim.X.Min, research.cone_start_t);
+        const double x1 = std::min(lim.X.Max, research.cone_end_t);
+        if (x1 > x0) {
+            constexpr int segments = 48;
+            const double duration
+                = research.cone_end_t - research.cone_start_t;
+            const double sigma
+                = research.cone_expected_move_bps / 10000.0;
+            const ImVec4 cone_color(0.28f, 0.64f, 0.98f, 1.0f);
+            const auto draw_cone = [&](double multiplier, float alpha,
+                                       float line_alpha) {
+                std::vector<ImVec2> upper;
+                std::vector<ImVec2> lower;
+                std::vector<ImVec2> polygon;
+                upper.reserve(segments + 1);
+                lower.reserve(segments + 1);
+                polygon.reserve((segments + 1) * 2);
+                for (int index = 0; index <= segments; ++index) {
+                    const double fraction
+                        = static_cast<double>(index) / segments;
+                    const double x = x0 + (x1 - x0) * fraction;
+                    const double remaining_fraction = std::clamp(
+                        (research.cone_end_t - x) / duration, 0.0, 1.0);
+                    const double move
+                        = sigma * multiplier * std::sqrt(remaining_fraction);
+                    upper.push_back(ImPlot::PlotToPixels(
+                        x, research.cone_center_price * std::exp(move)));
+                    lower.push_back(ImPlot::PlotToPixels(
+                        x, research.cone_center_price * std::exp(-move)));
+                }
+                polygon.insert(polygon.end(), upper.begin(), upper.end());
+                polygon.insert(polygon.end(), lower.rbegin(), lower.rend());
+                ImVec4 fill = cone_color;
+                fill.w = alpha;
+                dl->AddConvexPolyFilled(polygon.data(),
+                    static_cast<int>(polygon.size()), ImGui::GetColorU32(fill));
+                ImVec4 line = cone_color;
+                line.w = line_alpha;
+                dl->AddPolyline(upper.data(), static_cast<int>(upper.size()),
+                    ImGui::GetColorU32(line), ImDrawFlags_None, 1.0f);
+                dl->AddPolyline(lower.data(), static_cast<int>(lower.size()),
+                    ImGui::GetColorU32(line), ImDrawFlags_None, 1.0f);
+            };
+            draw_cone(2.0, 0.025f, 0.28f);
+            draw_cone(1.0, 0.065f, 0.58f);
+        }
+    }
     plot_candles("##candles", bars, bar_s, theme.bull, theme.bear);
     if (ind.ema_fast && !ind.ema_fast_v.empty())
         plot_line("##ema-fast", ind.x, ind.ema_fast_v, theme.ema_fast, 1.6f);
@@ -512,7 +562,9 @@ void Chart::draw_main_pane(
         plot_line("VWAP", ind.x, ind.vwap_v,
             ImVec4(0.86f, 0.45f, 0.93f, 1.0f), 1.5f);
 
-    // The last-price dashed line and its right-edge tag.
+    // Draw the last-price dashed line now. The right-edge tag is deferred
+    // until after EndPlot(), when ImPlot has merged its item channels; drawing
+    // it here lets the newest candle paint over the price text.
     if (!bars.empty()) {
         const Bar& lb = bars.back();
         const bool up = lb.c >= lb.o;
@@ -522,14 +574,17 @@ void Chart::draw_main_pane(
         for (float px = p0.x; px < p1.x; px += 10.0f)
             dl->AddLine(ImVec2(px, p0.y),
                 ImVec2(std::min(px + 5.0f, p1.x), p0.y), col, 1.0f);
-        char tag[32];
-        std::snprintf(tag, sizeof tag, "%.2f", lb.c);
-        const ImVec2 ts = ImGui::CalcTextSize(tag);
-        dl->AddRectFilled(
-            ImVec2(p1.x - ts.x - 12.0f, p0.y - ts.y * 0.5f - 3.0f),
-            ImVec2(p1.x, p0.y + ts.y * 0.5f + 3.0f), col, 3.0f);
-        dl->AddText(ImVec2(p1.x - ts.x - 6.0f, p0.y - ts.y * 0.5f),
-            IM_COL32(255, 255, 255, 255), tag);
+        std::snprintf(last_price_tag_text_, sizeof last_price_tag_text_,
+            "%.2f", lb.c);
+        const ImVec2 plot_pos = ImPlot::GetPlotPos();
+        const ImVec2 plot_size = ImPlot::GetPlotSize();
+        last_price_tag_visible_ = true;
+        last_price_tag_right_ = p1.x;
+        last_price_tag_y_ = p0.y;
+        last_price_tag_color_ = col;
+        last_price_tag_clip_min_ = plot_pos;
+        last_price_tag_clip_max_
+            = ImVec2(plot_pos.x + plot_size.x, plot_pos.y + plot_size.y);
     }
 
     // The top-left readout: the hovered bar wins, else the latest.
@@ -670,6 +725,27 @@ void Chart::draw_main_pane(
         --manual_view_frames_;
 }
 
+void Chart::draw_last_price_tag()
+{
+    if (!last_price_tag_visible_)
+        return;
+    const ImVec2 ts = ImGui::CalcTextSize(last_price_tag_text_);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(
+        last_price_tag_clip_min_, last_price_tag_clip_max_, true);
+    dl->AddRectFilled(
+        ImVec2(last_price_tag_right_ - ts.x - 12.0f,
+            last_price_tag_y_ - ts.y * 0.5f - 3.0f),
+        ImVec2(last_price_tag_right_,
+            last_price_tag_y_ + ts.y * 0.5f + 3.0f),
+        last_price_tag_color_, 3.0f);
+    dl->AddText(
+        ImVec2(last_price_tag_right_ - ts.x - 6.0f,
+            last_price_tag_y_ - ts.y * 0.5f),
+        IM_COL32(255, 255, 255, 255), last_price_tag_text_);
+    dl->PopClipRect();
+}
+
 void Chart::draw_volume_pane(
     const Series& s, const IndicatorSet&, bool bottom, bool switched)
 {
@@ -808,6 +884,7 @@ void Chart::draw(
 {
     const bool switched = last_series_ != nullptr && last_series_ != &series;
     last_series_ = &series;
+    last_price_tag_visible_ = false;
     ind.compute(series.bars());
     update_view(series);
 
@@ -841,6 +918,7 @@ void Chart::draw(
         if (ImPlot::BeginPlot("##main", ImVec2(-1, 0), pflags)) {
             draw_main_pane(series, ind, rows == 1);
             ImPlot::EndPlot();
+            draw_last_price_tag();
         }
         if (ind.volume
             && ImPlot::BeginPlot("##volume", ImVec2(-1, 0), pflags)) {

@@ -157,6 +157,11 @@ struct ResearchOverlay {
     double market_probability_up = 0;
     double edge_up = 0;
     double confidence = 0;
+    bool dynamic_cone_enabled = false;
+    double cone_start_t = 0;
+    double cone_end_t = 0;
+    double cone_center_price = 0;
+    double cone_expected_move_bps = 0;
 };
 
 class Chart {
@@ -214,6 +219,7 @@ private:
     void draw_rsi_pane(const Series& s, const IndicatorSet& ind);
     void draw_atr_pane(const Series& s, const IndicatorSet& ind);
     void draw_auxiliary_pane(const Series& s, const AuxiliaryPane& pane);
+    void draw_last_price_tag();
     void update_view(const Series& s); // eased advance while following
     void takeover_check();             // drag/scroll → the user takes over
 
@@ -226,6 +232,13 @@ private:
     double data_span_ = 60;
     double vx0_ = 0, vx1_ = 0; // eased viewport, X shared by all panes
     double vy0_ = 0, vy1_ = 0; // main-pane Y easing state
+    bool last_price_tag_visible_ = false;
+    float last_price_tag_right_ = 0;
+    float last_price_tag_y_ = 0;
+    ImVec2 last_price_tag_clip_min_ {};
+    ImVec2 last_price_tag_clip_max_ {};
+    ImU32 last_price_tag_color_ = 0;
+    char last_price_tag_text_[32] {};
 };
 
 }
