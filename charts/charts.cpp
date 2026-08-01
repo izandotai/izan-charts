@@ -646,29 +646,31 @@ void Chart::draw_rtds_price_layer(const ImPlotRect& limits)
             ImGui::GetColorU32(direction_color));
 
         ImVec4 beat_color = current_color;
-        beat_color.w = layer.fresh ? 0.64f : 0.38f;
-        const float y = ImPlot::PlotToPixels(
-            limits.X.Max, layer.beat_price).y;
-        for (float x = plot_pos.x + 5.0f;
-             x < plot_pos.x + plot_size.x - 5.0f; x += 10.0f) {
-            dl->AddLine(ImVec2(x, y),
-                ImVec2(std::min(x + 6.0f,
-                           plot_pos.x + plot_size.x - 5.0f),
-                    y),
-                ImGui::GetColorU32(beat_color), 1.1f);
-        }
+        beat_color.w = layer.fresh ? 0.50f : 0.30f;
+        ImPlotSpec beat_line;
+        beat_line.LineColor = beat_color;
+        beat_line.LineWeight = 1.25f;
+        beat_line.Flags = static_cast<ImPlotItemFlags>(
+            static_cast<int>(ImPlotInfLinesFlags_Horizontal)
+            | static_cast<int>(ImPlotItemFlags_NoFit));
+        ImPlot::PlotInfLines(
+            "##rtds-beat", &layer.beat_price, 1, beat_line);
         ImPlot::TagY(layer.beat_price, beat_color,
             "CL BEAT %.2f", layer.beat_price);
     }
 
-    ImPlotSpec current_line;
-    current_line.LineColor = current_color;
-    current_line.LineWeight = 1.6f;
-    current_line.Flags = static_cast<ImPlotItemFlags>(
-        static_cast<int>(ImPlotInfLinesFlags_Horizontal)
-        | static_cast<int>(ImPlotItemFlags_NoFit));
-    ImPlot::PlotInfLines(
-        "##rtds-current", &layer.current_price, 1, current_line);
+    ImVec4 current_line_color = current_color;
+    current_line_color.w = layer.fresh ? 0.50f : 0.30f;
+    const float current_y = ImPlot::PlotToPixels(
+        limits.X.Max, layer.current_price).y;
+    for (float x = plot_pos.x + 5.0f;
+         x < plot_pos.x + plot_size.x - 5.0f; x += 10.0f) {
+        dl->AddLine(ImVec2(x, current_y),
+            ImVec2(std::min(x + 6.0f,
+                       plot_pos.x + plot_size.x - 5.0f),
+                current_y),
+            ImGui::GetColorU32(current_line_color), 1.4f);
+    }
     ImPlot::TagY(layer.current_price, current_color,
         "RTDS %.2f", layer.current_price);
 
@@ -692,8 +694,13 @@ void Chart::draw_rtds_price_layer(const ImPlotRect& limits)
             layer.fresh ? "LIVE" : "STALE", layer.current_price,
             std::max(0.0, layer.current_age_ms));
     }
+    // Keep the overlay geometry stable while prices, age and LIVE/STALE text
+    // change. The slot follows a deliberate window resize, never the measured
+    // width of a volatile value string.
+    const float card_width = std::min(
+        plot_size.x - 20.0f, std::max(360.0f, plot_size.x * 0.62f));
     ImVec2 text_size = ImGui::CalcTextSize(text);
-    if (text_size.x > plot_size.x - 36.0f && layer.beat_price > 0) {
+    if (text_size.x > card_width - 16.0f && layer.beat_price > 0) {
         std::snprintf(text, sizeof text,
             "%s %s %s %.2f | CL B %.2f | %+.2fbp",
             layer.title.c_str(), layer.fresh ? "LIVE" : "STALE",
@@ -703,10 +710,10 @@ void Chart::draw_rtds_price_layer(const ImPlotRect& limits)
     }
     const ImVec2 p0(plot_pos.x + 10.0f,
         plot_pos.y + ImGui::GetTextLineHeightWithSpacing() * 2.0f + 10.0f);
-    const ImVec2 p1(p0.x + text_size.x + 16.0f,
+    const ImVec2 p1(p0.x + card_width,
         p0.y + text_size.y + 9.0f);
     ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
-    background.w = 0.68f;
+    background.w = 0.50f;
     dl->AddRectFilled(p0, p1, ImGui::GetColorU32(background), 4.0f);
     current_color.w = layer.fresh ? 0.88f : 0.58f;
     dl->AddRect(p0, p1, ImGui::GetColorU32(current_color), 4.0f);
