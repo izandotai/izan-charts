@@ -340,6 +340,7 @@ private:
     int manual_view_frames_ = 0;
     bool research_minimized_ = true;
     FocusedPane focused_pane_ = FocusedPane::All;
+    FocusedPane last_indicator_pane_ = FocusedPane::All;
     const Series* last_series_ = nullptr; // source-switch detection
     double span_ = 0;          // viewport width in seconds; 0 = unset
     double bar_seconds_ = 60;
