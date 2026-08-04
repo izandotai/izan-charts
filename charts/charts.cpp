@@ -435,10 +435,12 @@ void Chart::update_view(const Series& s)
     const float dt = ImGui::GetIO().DeltaTime;
     // Inside the seamless-switch window every easing teleports; the
     // frame counter burns here, exactly once per frame.
-    if (snap_frames_ > 0)
+    const bool snap_this_frame = snap_frames_ > 0;
+    if (snap_this_frame)
         --snap_frames_;
-    const double alpha
-        = snap_frames_ > 0 ? 1.0 : 1.0 - std::exp(-double(dt) * 12.0);
+    const double alpha = snap_this_frame
+        ? 1.0
+        : 1.0 - std::exp(-double(dt) * 12.0);
     const double tx1 = bars.back().t + bar_s * 6.0; // TV's right margin
     double tx0 = tx1 - span_;
     const double first = bars.front().t;
