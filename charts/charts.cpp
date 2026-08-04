@@ -516,7 +516,7 @@ void Chart::draw_expiry_risk_fan(const ImPlotRect& limits)
 
 void Chart::draw_expiry_risk_hud()
 {
-    const auto& layer = expiry_risk;
+    auto& layer = expiry_risk;
     if (!layer.available)
         return;
     const ImVec2 plot_pos = ImPlot::GetPlotPos();
@@ -531,6 +531,26 @@ void Chart::draw_expiry_risk_hud()
         safe ? theme.bull
              : (watch ? ImVec4(0.98f, 0.68f, 0.16f, 1.0f)
                       : theme.bear));
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    if (layer.minimized) {
+        const std::string compact = "[+] " + layer.title;
+        const ImVec2 text_size = ImGui::CalcTextSize(compact.c_str());
+        const ImVec2 p0(plot_pos.x + 9.0f,
+            plot_pos.y + plot_size.y - text_size.y - 27.0f);
+        const ImVec2 p1(p0.x + text_size.x + 16.0f,
+            p0.y + text_size.y + 9.0f);
+        ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
+        background.w = 0.66f;
+        dl->AddRectFilled(p0, p1, ImGui::GetColorU32(background), 4.0f);
+        accent.w = 0.78f;
+        dl->AddRect(p0, p1, ImGui::GetColorU32(accent), 4.0f);
+        dl->AddText(ImVec2(p0.x + 8.0f, p0.y + 4.0f),
+            ImGui::GetColorU32(accent), compact.c_str());
+        if (ImGui::IsMouseHoveringRect(p0, p1)
+            && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            layer.minimized = false;
+        return;
+    }
     char text[256];
     int used = std::snprintf(text, sizeof text,
         "%s %s %.2fσ  |  T-%.0fs", layer.title.c_str(), state,
@@ -554,12 +574,14 @@ void Chart::draw_expiry_risk_hud()
         p0.y + text_size.y + 9.0f);
     ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
     background.w = 0.90f;
-    ImDrawList* dl = ImPlot::GetPlotDrawList();
     dl->AddRectFilled(p0, p1, ImGui::GetColorU32(background), 4.0f);
     accent.w = 0.90f;
     dl->AddRect(p0, p1, ImGui::GetColorU32(accent), 4.0f);
     dl->AddText(ImVec2(p0.x + 8.0f, p0.y + 4.0f),
         ImGui::GetColorU32(accent), text);
+    if (ImGui::IsMouseHoveringRect(p0, p1)
+        && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        layer.minimized = true;
 
     if (layer.motion_available && layer.remaining_seconds > 0.0) {
         const double horizon = std::min(15.0, layer.remaining_seconds);
@@ -752,7 +774,7 @@ void Chart::draw_rtds_price_layer(const ImPlotRect& limits)
 
 void Chart::draw_venue_race_layer()
 {
-    const auto& layer = venue_race;
+    auto& layer = venue_race;
     if (!layer.available || layer.entries.empty())
         return;
     const ImVec2 plot_pos = ImPlot::GetPlotPos();
@@ -764,6 +786,29 @@ void Chart::draw_venue_race_layer()
     const float row_height = std::ceil(
         text_height + std::max(6.0f, style.ItemSpacing.y * 0.75f));
     const float header_height = std::ceil(text_height + padding_y * 2.0f);
+    const float top_offset
+        = (research.available ? text_height + 32.0f : 8.0f)
+        + (rtds_price.available ? text_height + 34.0f : 0.0f);
+    ImDrawList* dl = ImPlot::GetPlotDrawList();
+    if (layer.minimized) {
+        const std::string compact = "[+] " + layer.title;
+        const ImVec2 text_size = ImGui::CalcTextSize(compact.c_str());
+        const ImVec2 p0(plot_pos.x + 10.0f, plot_pos.y + top_offset);
+        const ImVec2 p1(p0.x + text_size.x + padding_x * 2.0f,
+            p0.y + text_height + padding_y * 2.0f);
+        ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
+        background.w = 0.62f;
+        ImVec4 border = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+        border.w = 0.52f;
+        dl->AddRectFilled(p0, p1, ImGui::GetColorU32(background), 5.0f);
+        dl->AddRect(p0, p1, ImGui::GetColorU32(border), 5.0f);
+        dl->AddText(ImVec2(p0.x + padding_x, p0.y + padding_y),
+            ImGui::GetColorU32(ImGuiCol_TextDisabled), compact.c_str());
+        if (ImGui::IsMouseHoveringRect(p0, p1)
+            && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            layer.minimized = false;
+        return;
+    }
     const auto format_value = [](char* destination, std::size_t size,
                                   const auto& entry) {
         if (entry.lead_lag_5s_available)
@@ -798,12 +843,8 @@ void Chart::draw_venue_race_layer()
     if (plot_size.x < width + 40.0f
         || plot_size.y < card_height + 30.0f)
         return;
-    const float top_offset
-        = (research.available ? text_height + 32.0f : 8.0f)
-        + (rtds_price.available ? text_height + 34.0f : 0.0f);
     const ImVec2 p0(plot_pos.x + 10.0f, plot_pos.y + top_offset);
     const ImVec2 p1(p0.x + width, p0.y + card_height);
-    ImDrawList* dl = ImPlot::GetPlotDrawList();
     ImVec4 background = ImGui::GetStyleColorVec4(ImGuiCol_PopupBg);
     background.w = 0.68f;
     dl->AddRectFilled(p0, p1, ImGui::GetColorU32(background), 6.0f);
@@ -826,6 +867,9 @@ void Chart::draw_venue_race_layer()
     dl->AddLine(ImVec2(p0.x + padding_x, p0.y + header_height),
         ImVec2(p1.x - padding_x, p0.y + header_height),
         ImGui::GetColorU32(border), 1.0f);
+    if (ImGui::IsMouseHoveringRect(p0, ImVec2(p1.x, p0.y + header_height))
+        && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        layer.minimized = true;
 
     double scale = 1.0;
     for (const auto& entry : layer.entries)
@@ -911,7 +955,7 @@ void Chart::draw_venue_race_layer()
 
 void Chart::draw_leverage_regime_layer(const ImPlotRect& limits)
 {
-    const auto& layer = leverage_regime;
+    auto& layer = leverage_regime;
     if (!layer.available || layer.points.empty())
         return;
     const ImVec2 plot_pos = ImPlot::GetPlotPos();
@@ -988,9 +1032,12 @@ void Chart::draw_leverage_regime_layer(const ImPlotRect& limits)
     ImVec4 latest_color = color_for(latest.regime);
     latest_color.w = 0.95f;
     char badge[160];
-    std::snprintf(badge, sizeof badge, "%s %s  px %+.2fbp / OI %+.3f%%",
-        layer.title.c_str(), label_for(latest.regime),
-        latest.price_impulse_bps, latest.open_interest_delta_pct);
+    if (layer.minimized)
+        std::snprintf(badge, sizeof badge, "[+] %s", layer.title.c_str());
+    else
+        std::snprintf(badge, sizeof badge, "%s %s  px %+.2fbp / OI %+.3f%%",
+            layer.title.c_str(), label_for(latest.regime),
+            latest.price_impulse_bps, latest.open_interest_delta_pct);
     const ImVec2 text_size = ImGui::CalcTextSize(badge);
     const ImVec2 badge0(plot_pos.x + plot_size.x - text_size.x - 25.0f,
         strip_top - text_size.y - 9.0f);
@@ -1005,8 +1052,11 @@ void Chart::draw_leverage_regime_layer(const ImPlotRect& limits)
             badge0, badge1, ImGui::GetColorU32(latest_color), 3.0f);
         dl->AddText(ImVec2(badge0.x + 7.0f, badge0.y + 3.0f),
             ImGui::GetColorU32(latest_color), badge);
-        if (ImGui::IsMouseHoveringRect(badge0, badge1))
+        if (ImGui::IsMouseHoveringRect(badge0, badge1)) {
             hovered = &latest;
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                layer.minimized = !layer.minimized;
+        }
     }
 
     if (hovered) {
@@ -1508,10 +1558,40 @@ void Chart::draw(
     }
 
     // Pane count and ratios — the TV default layout.
+    const auto pane_available = [&](FocusedPane pane) {
+        switch (pane) {
+        case FocusedPane::All:
+        case FocusedPane::Main:
+            return true;
+        case FocusedPane::Volume:
+            return ind.volume;
+        case FocusedPane::Macd:
+            return ind.macd;
+        case FocusedPane::Rsi:
+            return ind.rsi;
+        case FocusedPane::Atr:
+            return ind.atr;
+        case FocusedPane::Auxiliary:
+            return auxiliary && !auxiliary->lines.empty();
+        }
+        return false;
+    };
+    if (!pane_available(focused_pane_))
+        focused_pane_ = FocusedPane::All;
+    const FocusedPane frame_focus = focused_pane_;
+    const auto visible = [&](FocusedPane pane) {
+        return frame_focus == FocusedPane::All || frame_focus == pane;
+    };
+    const auto focus_on_double_click = [&](FocusedPane pane) {
+        if (ImPlot::IsPlotHovered()
+            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            focused_pane_ = frame_focus == pane ? FocusedPane::All : pane;
+    };
+
     const int indicator_rows = (ind.volume ? 1 : 0) + (ind.macd ? 1 : 0)
         + (ind.rsi ? 1 : 0) + (ind.atr ? 1 : 0)
         + (auxiliary && !auxiliary->lines.empty() ? 1 : 0);
-    const int rows = 1 + indicator_rows;
+    const int rows = frame_focus == FocusedPane::All ? 1 + indicator_rows : 1;
     std::vector<float> ratios_buf(static_cast<std::size_t>(rows),
         indicator_rows == 0 ? 1.0f : 0.18f);
     if (indicator_rows > 0)
@@ -1524,34 +1604,44 @@ void Chart::draw(
         const ImPlotFlags pflags = ImPlotFlags_Crosshairs | ImPlotFlags_NoLegend
             | ImPlotFlags_NoBoxSelect | ImPlotFlags_NoMenus
             | ImPlotFlags_NoTitle;
-        if (ImPlot::BeginPlot("##main", ImVec2(-1, 0), pflags)) {
+        if (visible(FocusedPane::Main)
+            && ImPlot::BeginPlot("##main", ImVec2(-1, 0), pflags)) {
             draw_main_pane(series, ind, rows == 1);
+            focus_on_double_click(FocusedPane::Main);
             ImPlot::EndPlot();
             draw_last_price_tag();
         }
-        if (ind.volume
+        if (visible(FocusedPane::Volume) && ind.volume
             && ImPlot::BeginPlot("##volume", ImVec2(-1, 0), pflags)) {
             draw_volume_pane(series, ind,
                 !ind.macd && !ind.rsi && !ind.atr
                     && (!auxiliary || auxiliary->lines.empty()),
                 switched);
+            focus_on_double_click(FocusedPane::Volume);
             ImPlot::EndPlot();
         }
-        if (ind.macd && ImPlot::BeginPlot("##macd", ImVec2(-1, 0), pflags)) {
+        if (visible(FocusedPane::Macd) && ind.macd
+            && ImPlot::BeginPlot("##macd", ImVec2(-1, 0), pflags)) {
             draw_macd_pane(series, ind);
+            focus_on_double_click(FocusedPane::Macd);
             ImPlot::EndPlot();
         }
-        if (ind.rsi && ImPlot::BeginPlot("##rsi", ImVec2(-1, 0), pflags)) {
+        if (visible(FocusedPane::Rsi) && ind.rsi
+            && ImPlot::BeginPlot("##rsi", ImVec2(-1, 0), pflags)) {
             draw_rsi_pane(series, ind);
+            focus_on_double_click(FocusedPane::Rsi);
             ImPlot::EndPlot();
         }
-        if (ind.atr && ImPlot::BeginPlot("##atr", ImVec2(-1, 0), pflags)) {
+        if (visible(FocusedPane::Atr) && ind.atr
+            && ImPlot::BeginPlot("##atr", ImVec2(-1, 0), pflags)) {
             draw_atr_pane(series, ind);
+            focus_on_double_click(FocusedPane::Atr);
             ImPlot::EndPlot();
         }
-        if (auxiliary && !auxiliary->lines.empty()
+        if (visible(FocusedPane::Auxiliary) && auxiliary && !auxiliary->lines.empty()
             && ImPlot::BeginPlot("##auxiliary", ImVec2(-1, 0), pflags)) {
             draw_auxiliary_pane(series, *auxiliary);
+            focus_on_double_click(FocusedPane::Auxiliary);
             ImPlot::EndPlot();
         }
         ImPlot::EndSubplots();

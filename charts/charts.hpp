@@ -170,6 +170,7 @@ struct ResearchOverlay {
 // cannot disturb candles, indicators, or another overlay.
 struct ExpiryRiskLayer {
     bool available = false;
+    bool minimized = true;
     std::string title = "ANCHOR RISK";
     std::string help;
     double start_t = 0;
@@ -201,6 +202,7 @@ struct VenueRaceEntry {
 
 struct VenueRaceLayer {
     bool available = false;
+    bool minimized = true;
     std::string title = "VENUE RACE";
     std::string help;
     double consensus_mad_bps = 0;
@@ -245,6 +247,7 @@ struct LeverageRegimePoint {
 
 struct LeverageRegimeLayer {
     bool available = false;
+    bool minimized = true;
     std::string title = "PRICE x OI";
     std::string help;
     std::string source_key;
@@ -305,6 +308,16 @@ public:
     const char* paused_note = "(paused: dragging / scrolling)";
 
 private:
+    enum class FocusedPane : std::uint8_t {
+        All,
+        Main,
+        Volume,
+        Macd,
+        Rsi,
+        Atr,
+        Auxiliary,
+    };
+
     void draw_main_pane(const Series& s, const IndicatorSet& ind, bool bottom);
     void draw_volume_pane(
         const Series& s, const IndicatorSet& ind, bool bottom, bool switched);
@@ -324,6 +337,7 @@ private:
     bool follow_ = true;
     int snap_frames_ = 0; // >0: the seamless-switch window, all teleports
     int manual_view_frames_ = 0;
+    FocusedPane focused_pane_ = FocusedPane::All;
     const Series* last_series_ = nullptr; // source-switch detection
     double span_ = 0;          // viewport width in seconds; 0 = unset
     double bar_seconds_ = 60;
