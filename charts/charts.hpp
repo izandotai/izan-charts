@@ -11,10 +11,11 @@
 //   + OHLC/indicator readouts.
 //   Sub panes: volume (bull green, bear red) and MACD (DIF/DEA lines
 //   plus histogram).
-//   Interaction: dragging or scrolling takes the view over; "follow
-//   latest" returns to the live edge; the following viewport eases
-//   exponentially; the panes share one X axis (LinkAllX) while every
-//   Y fits its own visible slice; the price axis sits on the right.
+//   Interaction: dragging or scrolling takes the view over; wheel zooms
+//   both axes, Shift+wheel only X, and Alt+wheel only Y; "follow latest"
+//   returns to the live edge; the following viewport eases exponentially;
+//   the panes share one X axis (LinkAllX) while every Y fits its own visible
+//   slice; the price axis sits on the right.
 
 #include <imgui.h>
 #include <implot.h>

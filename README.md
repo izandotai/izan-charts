@@ -9,9 +9,12 @@ floor — lines, bars, axes; this library adds the financial storey:
   in full each frame (a thousand bars cost well under a millisecond)
 - **Linked panes** — main / volume / MACD sharing one X axis, each Y
   fitting its own visible slice, price axis on the right
-- **The TradingView interaction contract** — drag or scroll to take
-  the view over, one click to follow the live edge again, eased
-  viewport, seamless source switching without stretch animation
+- **The TradingView interaction contract** — wheel zooms X/Y together,
+  Shift+wheel zooms time only, Alt+wheel zooms value only, Ctrl+double-click
+  focuses/restores a pane without losing its viewport, and one click follows
+  the live edge again
+- **Fast antialiased curves** — integer-width, atlas-textured line rendering
+  keeps EMA, Bollinger, MACD and auxiliary plots crisp without MSAA overhead
 - **Event markers** and a reference-price line for the application to
   pin its own story onto the tape
 

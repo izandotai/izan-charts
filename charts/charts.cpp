@@ -48,6 +48,35 @@ namespace {
 
     constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
+    struct WheelZoomIntent {
+        bool active = false;
+        bool x_only = false;
+        bool y_only = false;
+    };
+
+    WheelZoomIntent wheel_zoom_intent()
+    {
+        const ImGuiIO& io = ImGui::GetIO();
+        WheelZoomIntent result;
+        result.active = ImPlot::IsPlotHovered() && io.MouseWheel != 0.0f
+            && !io.KeyCtrl;
+        result.x_only = result.active && io.KeyShift && !io.KeyAlt;
+        result.y_only = result.active && io.KeyAlt && !io.KeyShift;
+        return result;
+    }
+
+    ImPlotAxisFlags interactive_x_flags(
+        ImPlotAxisFlags flags, const WheelZoomIntent& zoom)
+    {
+        return zoom.y_only ? flags | ImPlotAxisFlags_Lock : flags;
+    }
+
+    ImPlotAxisFlags interactive_y_flags(
+        ImPlotAxisFlags flags, const WheelZoomIntent& zoom)
+    {
+        return zoom.x_only ? flags | ImPlotAxisFlags_Lock : flags;
+    }
+
     void ema(const std::vector<Bar>& bars, int n, std::vector<double>& out)
     {
         out.assign(bars.size(), kNaN);
@@ -333,9 +362,16 @@ namespace {
     {
         if (x.empty() || y.size() != x.size())
             return;
+        // ImPlot's fast antialiasing path uses the font atlas' baked line
+        // texture. It is both cheaper and cleaner than geometry AA, but its
+        // samples are indexed by an integer pixel width. Normalize authored
+        // fractional widths so the selected texture and geometry agree.
+        ImDrawList* draw_list = ImPlot::GetPlotDrawList();
+        draw_list->Flags |= ImDrawListFlags_AntiAliasedLines
+            | ImDrawListFlags_AntiAliasedLinesUseTex;
         ImPlotSpec spec;
         spec.LineColor = col;
-        spec.LineWeight = weight;
+        spec.LineWeight = std::max(1.0f, std::round(weight));
         ImPlot::PlotLine(
             id, x.data(), y.data(), static_cast<int>(x.size()), spec);
     }
@@ -359,7 +395,7 @@ namespace {
 
 void Chart::takeover_check()
 {
-    if (ImPlot::IsPlotHovered()
+    if (ImPlot::IsPlotHovered() && !ImGui::GetIO().KeyCtrl
         && (ImGui::IsMouseDragging(ImGuiMouseButton_Left)
             || ImGui::GetIO().MouseWheel != 0.0f)) {
         follow_ = false;
@@ -393,6 +429,8 @@ void Chart::update_view(const Series& s)
         vx0_ = tx0;
         vx1_ = tx1;
     }
+    if (!follow_)
+        return;
     vx0_ += (tx0 - vx0_) * alpha;
     vx1_ += (tx1 - vx1_) * alpha;
 }
@@ -1084,10 +1122,14 @@ void Chart::draw_main_pane(
 {
     const auto& bars = s.bars();
     const double bar_s = s.bar_seconds();
-    ImPlot::SetupAxes(nullptr, nullptr,
+    const WheelZoomIntent zoom = wheel_zoom_intent();
+    const ImPlotAxisFlags xflags = interactive_x_flags(
         bottom ? ImPlotAxisFlags_NoLabel
                : (ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels),
-        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite);
+        zoom);
+    const ImPlotAxisFlags yflags = interactive_y_flags(
+        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite, zoom);
+    ImPlot::SetupAxes(nullptr, nullptr, xflags, yflags);
     // The formatter rides every pane: NoTickLabels suppresses the tick
     // text but the crosshair readout still goes through the formatter
     // — hovering shows HH:MM:SS, not raw seconds.
@@ -1119,9 +1161,12 @@ void Chart::draw_main_pane(
             vy0_ += (ty0 - vy0_) * alpha;
             vy1_ += (ty1 - vy1_) * alpha;
         }
-        ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
-        if (follow_)
-            ImPlot::SetupAxisLimits(ImAxis_Y1, vy0_, vy1_, ImGuiCond_Always);
+        if (!zoom.active) {
+            ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
+            if (follow_)
+                ImPlot::SetupAxisLimits(
+                    ImAxis_Y1, vy0_, vy1_, ImGuiCond_Always);
+        }
     }
 
     // The Bollinger band is laid first; lines and candles go on top.
@@ -1387,10 +1432,11 @@ void Chart::draw_main_pane(
     draw_venue_race_layer();
 
     takeover_check();
-    if (!follow_)
+    if (!follow_) {
+        vx0_ = lim.X.Min;
+        vx1_ = lim.X.Max;
         span_ = lim.X.Max - lim.X.Min;
-    if (manual_view_frames_ > 0)
-        --manual_view_frames_;
+    }
 }
 
 void Chart::draw_last_price_tag()
@@ -1417,13 +1463,19 @@ void Chart::draw_last_price_tag()
 void Chart::draw_volume_pane(
     const Series& s, const IndicatorSet&, bool bottom, bool switched)
 {
-    ImPlot::SetupAxes(nullptr, nullptr,
+    const WheelZoomIntent zoom = wheel_zoom_intent();
+    const ImPlotAxisFlags xflags = interactive_x_flags(
         bottom ? ImPlotAxisFlags_NoLabel
                : (ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels),
-        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite
-            | ImPlotAxisFlags_AutoFit);
+        zoom);
+    ImPlotAxisFlags yflags =
+        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite;
+    if (follow_ && !zoom.active)
+        yflags |= ImPlotAxisFlags_AutoFit;
+    yflags = interactive_y_flags(yflags, zoom);
+    ImPlot::SetupAxes(nullptr, nullptr, xflags, yflags);
     ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
-    if (switched || snap_frames_ > 0) {
+    if (!zoom.active && (switched || snap_frames_ > 0)) {
         // A source switch can move the volume scale by orders of
         // magnitude, and AutoFit commits this frame but applies NEXT
         // frame — the switch frame would paint against the old scale.
@@ -1440,7 +1492,7 @@ void Chart::draw_volume_pane(
         if (vmax > 0)
             ImPlot::SetupAxisLimits(ImAxis_Y1, 0, vmax, ImGuiCond_Always);
     }
-    if (follow_ || manual_view_frames_ > 0)
+    if (!zoom.active && (follow_ || manual_view_frames_ > 0))
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
     plot_volume("##vol", s.bars(), s.bar_seconds(), theme.bull, theme.bear);
     takeover_check();
@@ -1448,12 +1500,56 @@ void Chart::draw_volume_pane(
 
 void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
 {
-    ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoLabel,
-        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite
-            | ImPlotAxisFlags_AutoFit);
+    const WheelZoomIntent zoom = wheel_zoom_intent();
+    const ImPlotAxisFlags xflags =
+        interactive_x_flags(ImPlotAxisFlags_NoLabel, zoom);
+    ImPlotAxisFlags yflags =
+        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite;
+    if (follow_ && !zoom.active)
+        yflags |= ImPlotAxisFlags_AutoFit;
+    yflags = interactive_y_flags(yflags, zoom);
+    ImPlot::SetupAxes(nullptr, nullptr, xflags, yflags);
     ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
-    if (follow_ || manual_view_frames_ > 0)
+    if (!zoom.active && (follow_ || manual_view_frames_ > 0))
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
+
+    ImPlot::SetupFinish();
+    if (research.window_end_t > research.window_start_t) {
+        const ImPlotRect limits = ImPlot::GetPlotLimits();
+        const double x0 = std::max(limits.X.Min, research.window_start_t);
+        const double x1 = std::min(limits.X.Max, research.window_end_t);
+        if (x1 > x0) {
+            const ImVec2 plot_pos = ImPlot::GetPlotPos();
+            const ImVec2 plot_size = ImPlot::GetPlotSize();
+            const float px0 = ImPlot::PlotToPixels(x0, limits.Y.Min).x;
+            const float px1 = ImPlot::PlotToPixels(x1, limits.Y.Min).x;
+            ImVec4 fill = ref_color;
+            fill.w = 0.10f;
+            ImVec4 edge = ref_color;
+            edge.w = 0.62f;
+            ImDrawList* draw_list = ImPlot::GetPlotDrawList();
+            ImPlot::PushPlotClipRect();
+            draw_list->AddRectFilled(ImVec2(px0, plot_pos.y),
+                ImVec2(px1, plot_pos.y + plot_size.y),
+                ImGui::GetColorU32(fill));
+            draw_list->AddLine(ImVec2(px0, plot_pos.y),
+                ImVec2(px0, plot_pos.y + plot_size.y),
+                ImGui::GetColorU32(edge), 1.0f);
+            draw_list->AddLine(ImVec2(px1, plot_pos.y),
+                ImVec2(px1, plot_pos.y + plot_size.y),
+                ImGui::GetColorU32(edge), 1.0f);
+            const int minutes = std::max(1,
+                static_cast<int>(std::lround(
+                    (research.window_end_t - research.window_start_t) / 60.0)));
+            char label[48];
+            std::snprintf(label, sizeof label, "CURRENT %dm · 1m BARS", minutes);
+            const ImVec2 label_size = ImGui::CalcTextSize(label);
+            if (px1 - px0 > label_size.x + 14.0f)
+                draw_list->AddText(ImVec2(px0 + 7.0f, plot_pos.y + 5.0f),
+                    ImGui::GetColorU32(edge), label);
+            ImPlot::PopPlotClipRect();
+        }
+    }
     plot_hist("##macd-hist", ind.x, ind.macd_hist, s.bar_seconds(), theme.bull,
         theme.bear);
     plot_line("##macd-dif", ind.x, ind.macd_dif, theme.macd_dif, 1.5f);
@@ -1487,11 +1583,16 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
 
 void Chart::draw_rsi_pane(const Series& s, const IndicatorSet& ind)
 {
-    ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoLabel,
-        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite);
+    const WheelZoomIntent zoom = wheel_zoom_intent();
+    const ImPlotAxisFlags xflags =
+        interactive_x_flags(ImPlotAxisFlags_NoLabel, zoom);
+    const ImPlotAxisFlags yflags = interactive_y_flags(
+        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite, zoom);
+    ImPlot::SetupAxes(nullptr, nullptr, xflags, yflags);
     ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
-    ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 100, ImGuiCond_Always);
-    if (follow_ || manual_view_frames_ > 0)
+    if (follow_ && !zoom.active)
+        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 100, ImGuiCond_Always);
+    if (!zoom.active && (follow_ || manual_view_frames_ > 0))
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
     plot_line("RSI", ind.x, ind.rsi_v,
         ImVec4(0.73f, 0.41f, 0.78f, 1.0f), 1.5f);
@@ -1506,11 +1607,17 @@ void Chart::draw_rsi_pane(const Series& s, const IndicatorSet& ind)
 
 void Chart::draw_atr_pane(const Series& s, const IndicatorSet& ind)
 {
-    ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoLabel,
-        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite
-            | ImPlotAxisFlags_AutoFit);
+    const WheelZoomIntent zoom = wheel_zoom_intent();
+    const ImPlotAxisFlags xflags =
+        interactive_x_flags(ImPlotAxisFlags_NoLabel, zoom);
+    ImPlotAxisFlags yflags =
+        ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite;
+    if (follow_ && !zoom.active)
+        yflags |= ImPlotAxisFlags_AutoFit;
+    yflags = interactive_y_flags(yflags, zoom);
+    ImPlot::SetupAxes(nullptr, nullptr, xflags, yflags);
     ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
-    if (follow_ || manual_view_frames_ > 0)
+    if (!zoom.active && (follow_ || manual_view_frames_ > 0))
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
     plot_line("ATR", ind.x, ind.atr_v,
         ImVec4(0.95f, 0.65f, 0.20f, 1.0f), 1.5f);
@@ -1519,16 +1626,20 @@ void Chart::draw_atr_pane(const Series& s, const IndicatorSet& ind)
 
 void Chart::draw_auxiliary_pane(const Series&, const AuxiliaryPane& pane)
 {
+    const WheelZoomIntent zoom = wheel_zoom_intent();
     ImPlotAxisFlags yflags
         = ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_Opposite;
-    if (!(pane.y_max > pane.y_min))
+    if (follow_ && !zoom.active && !(pane.y_max > pane.y_min))
         yflags |= ImPlotAxisFlags_AutoFit;
-    ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoLabel, yflags);
+    yflags = interactive_y_flags(yflags, zoom);
+    const ImPlotAxisFlags xflags =
+        interactive_x_flags(ImPlotAxisFlags_NoLabel, zoom);
+    ImPlot::SetupAxes(nullptr, nullptr, xflags, yflags);
     ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
-    if (pane.y_max > pane.y_min)
+    if (follow_ && !zoom.active && pane.y_max > pane.y_min)
         ImPlot::SetupAxisLimits(
             ImAxis_Y1, pane.y_min, pane.y_max, ImGuiCond_Always);
-    if (follow_ || manual_view_frames_ > 0)
+    if (!zoom.active && (follow_ || manual_view_frames_ > 0))
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
     for (const auto& line : pane.lines)
         plot_line(line.label.c_str(), line.x, line.y, line.color, 1.5f);
@@ -1596,8 +1707,17 @@ void Chart::draw(
         // OverrideMod is Ctrl, so Ctrl+double-click is ignored by ImPlot and
         // can safely toggle pane focus without also changing the plot range.
         if (ImPlot::IsPlotHovered() && ImGui::GetIO().KeyCtrl
-            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            // Changing the subplot row count resets ImPlot's shared-link
+            // storage to [0,1]. Preserve the real timestamp viewport and
+            // explicitly restore it for the layout-change frames.
+            const ImPlotRect limits = ImPlot::GetPlotLimits();
+            vx0_ = limits.X.Min;
+            vx1_ = limits.X.Max;
+            span_ = std::max(bar_seconds_, vx1_ - vx0_);
+            manual_view_frames_ = 3;
             focused_pane_ = frame_focus == pane ? FocusedPane::All : pane;
+        }
     };
 
     const int indicator_rows = (ind.volume ? 1 : 0) + (ind.macd ? 1 : 0)
@@ -1658,6 +1778,8 @@ void Chart::draw(
         }
         ImPlot::EndSubplots();
     }
+    if (manual_view_frames_ > 0)
+        --manual_view_frames_;
 }
 
 }
