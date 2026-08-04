@@ -12,8 +12,8 @@ floor — lines, bars, axes; this library adds the financial storey:
 - **The TradingView interaction contract** — wheel zooms X/Y together,
   Shift+wheel zooms time only, Alt+wheel zooms value only, Ctrl+double-click
   focuses/restores a pane without losing its viewport, switching indicators
-  replaces the focused pane in place, and one click follows
-  the live edge again
+  replaces the focused pane in place, and one click atomically follows the
+  live edge again without exposing an invalid intermediate range
 - **Fast antialiased curves** — integer-width, atlas-textured line rendering
   keeps EMA, Bollinger, MACD and auxiliary plots crisp without MSAA overhead
 - **Event markers** and a reference-price line for the application to

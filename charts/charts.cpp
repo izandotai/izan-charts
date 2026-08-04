@@ -406,6 +406,7 @@ void Chart::takeover_check()
         && (ImGui::IsMouseDragging(ImGuiMouseButton_Left)
             || ImGui::GetIO().MouseWheel != 0.0f)) {
         follow_ = false;
+        follow_request_pending_ = false;
     }
     // The main pane is not present while an indicator pane is focused. Keep
     // the shared X viewport authoritative from whichever pane is actually
@@ -413,7 +414,8 @@ void Chart::takeover_check()
     // coordinates and appears to jump back to an earlier chart position.
     if (!follow_) {
         const ImPlotRect limits = ImPlot::GetPlotLimits();
-        if (limits.X.Max > limits.X.Min) {
+        if (std::isfinite(limits.X.Min) && std::isfinite(limits.X.Max)
+            && limits.X.Max > limits.X.Min) {
             vx0_ = limits.X.Min;
             vx1_ = limits.X.Max;
             span_ = vx1_ - vx0_;
@@ -426,12 +428,22 @@ void Chart::update_view(const Series& s)
     const auto& bars = s.bars();
     if (bars.empty())
         return;
+    if (follow_request_pending_) {
+        follow_ = true;
+        follow_request_pending_ = false;
+    }
     const double bar_s = s.bar_seconds();
     bar_seconds_ = bar_s;
     data_span_ = std::max(
         bar_s, bars.back().t + bar_s - bars.front().t);
-    if (span_ <= 0)
+    if (!std::isfinite(span_) || span_ <= 0)
         span_ = bar_s * 120; // 120 bars per screen by default
+    if (follow_) {
+        const double minimum_span = bar_s * 12.0;
+        const double maximum_span = std::max(
+            minimum_span, data_span_ + bar_s * 12.0);
+        span_ = std::clamp(span_, minimum_span, maximum_span);
+    }
     const float dt = ImGui::GetIO().DeltaTime;
     // Inside the seamless-switch window every easing teleports; the
     // frame counter burns here, exactly once per frame.
@@ -446,7 +458,7 @@ void Chart::update_view(const Series& s)
     const double first = bars.front().t;
     if (tx0 < first)
         tx0 = first; // less than a screen of data leaves no dead space
-    if (vx1_ <= vx0_) {
+    if (!std::isfinite(vx0_) || !std::isfinite(vx1_) || vx1_ <= vx0_) {
         vx0_ = tx0;
         vx1_ = tx1;
     }
@@ -480,6 +492,7 @@ void Chart::pan_bars(double bars)
     if (span_ <= 0)
         return;
     follow_ = false;
+    follow_request_pending_ = false;
     const double delta = bars * bar_seconds_;
     vx0_ += delta;
     vx1_ += delta;
@@ -1772,8 +1785,9 @@ void Chart::draw(
     if (indicator_rows > 0)
         ratios_buf[0] = std::max(0.46f, 1.0f - indicator_rows * 0.18f);
 
-    const ImPlotSubplotFlags sflags = ImPlotSubplotFlags_LinkAllX
-        | ImPlotSubplotFlags_NoTitle | ImPlotSubplotFlags_NoMenus;
+    const ImPlotSubplotFlags sflags = ImPlotSubplotFlags_NoTitle
+        | ImPlotSubplotFlags_NoMenus
+        | (rows > 1 ? ImPlotSubplotFlags_LinkAllX : ImPlotSubplotFlags_None);
     if (ImPlot::BeginSubplots(
             id, rows, 1, size, sflags, ratios_buf.data())) {
         const ImPlotFlags pflags = ImPlotFlags_Crosshairs | ImPlotFlags_NoLegend
