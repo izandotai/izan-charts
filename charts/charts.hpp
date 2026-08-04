@@ -20,6 +20,7 @@
 #include <imgui.h>
 #include <implot.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -272,10 +273,12 @@ public:
     void set_follow(bool on)
     {
         follow_ = on;
-        if (on) { // invalidate the viewport: next frame snaps into place
-            vx1_ = vx0_;
-            vy1_ = vy0_;
-        }
+        // Keep the current range valid for the remainder of this frame. The
+        // in-chart follow button is processed after update_view(); poisoning
+        // the range here used to feed [x,x] into every subplot and made the
+        // chart disappear until a later frame happened to recover it.
+        if (on)
+            snap_frames_ = std::max(snap_frames_, 2);
     }
 
     // Seamless switching: for a window of frames every easing becomes
@@ -284,8 +287,8 @@ public:
     // Default ~2s at 60fps.
     void snap_view(int frames = 120)
     {
-        snap_frames_ = frames;
-        set_follow(true);
+        follow_ = true;
+        snap_frames_ = std::max(1, frames);
     }
 
     void zoom(double factor);
