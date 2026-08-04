@@ -407,6 +407,18 @@ void Chart::takeover_check()
             || ImGui::GetIO().MouseWheel != 0.0f)) {
         follow_ = false;
     }
+    // The main pane is not present while an indicator pane is focused. Keep
+    // the shared X viewport authoritative from whichever pane is actually
+    // visible, otherwise changing the selected indicator restores stale
+    // coordinates and appears to jump back to an earlier chart position.
+    if (!follow_) {
+        const ImPlotRect limits = ImPlot::GetPlotLimits();
+        if (limits.X.Max > limits.X.Min) {
+            vx0_ = limits.X.Min;
+            vx1_ = limits.X.Max;
+            span_ = vx1_ - vx0_;
+        }
+    }
 }
 
 void Chart::update_view(const Series& s)
@@ -1703,7 +1715,29 @@ void Chart::draw(
         }
         return false;
     };
-    if (!pane_available(focused_pane_))
+    const auto is_indicator_pane = [](FocusedPane pane) {
+        return pane == FocusedPane::Macd || pane == FocusedPane::Rsi
+            || pane == FocusedPane::Atr || pane == FocusedPane::Auxiliary;
+    };
+    const FocusedPane active_indicator_pane = ind.macd   ? FocusedPane::Macd
+        : ind.rsi                                          ? FocusedPane::Rsi
+        : ind.atr                                          ? FocusedPane::Atr
+        : auxiliary && !auxiliary->lines.empty()           ? FocusedPane::Auxiliary
+                                                           : FocusedPane::All;
+    const bool indicator_changed = active_indicator_pane != FocusedPane::All
+        && last_indicator_pane_ != FocusedPane::All
+        && active_indicator_pane != last_indicator_pane_;
+    if (indicator_changed) {
+        // MACD/RSI/ATR/auxiliary are different contents of one linked pane
+        // slot. Replacing the content must not leave focus mode or discard the
+        // shared manual X viewport.
+        if (is_indicator_pane(focused_pane_))
+            focused_pane_ = active_indicator_pane;
+        manual_view_frames_ = std::max(manual_view_frames_, 3);
+    }
+    if (active_indicator_pane != FocusedPane::All)
+        last_indicator_pane_ = active_indicator_pane;
+    if (!pane_available(focused_pane_) && !is_indicator_pane(focused_pane_))
         focused_pane_ = FocusedPane::All;
     const FocusedPane frame_focus = focused_pane_;
     const auto visible = [&](FocusedPane pane) {
