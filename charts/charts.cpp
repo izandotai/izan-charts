@@ -1292,12 +1292,18 @@ void Chart::draw_main_pane(
 
     if (research.available) {
         char buf[256];
-        std::snprintf(buf, sizeof buf,
-            "RESEARCH %s  Fair UP %.1f%%  Market %.1f%%  Edge %+.1fpp  "
-            "Conf %.0f%%  EM +/-%.1fbp",
-            research.horizon.c_str(), research.fair_probability_up * 100.0,
-            research.market_probability_up * 100.0, research.edge_up * 100.0,
-            research.confidence * 100.0, research.expected_move_bps);
+        if (research_minimized_) {
+            std::snprintf(buf, sizeof buf, "[+] RESEARCH %s",
+                research.horizon.c_str());
+        }
+        else {
+            std::snprintf(buf, sizeof buf,
+                "[-] RESEARCH %s  Fair UP %.1f%%  Market %.1f%%  Edge %+.1fpp  "
+                "Conf %.0f%%  EM +/-%.1fbp",
+                research.horizon.c_str(), research.fair_probability_up * 100.0,
+                research.market_probability_up * 100.0, research.edge_up * 100.0,
+                research.confidence * 100.0, research.expected_move_bps);
+        }
         const ImVec2 pos = ImPlot::GetPlotPos();
         const ImVec2 text_size = ImGui::CalcTextSize(buf);
         const ImVec2 plot_size = ImPlot::GetPlotSize();
@@ -1313,6 +1319,9 @@ void Chart::draw_main_pane(
         dl->AddRect(p0, p1, ImGui::GetColorU32(ref_color), 4.0f);
         dl->AddText(ImVec2(p0.x + 8.0f, p0.y + 5.0f),
             ImGui::GetColorU32(ImGuiCol_Text), buf);
+        if (ImGui::IsMouseHoveringRect(p0, p1)
+            && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            research_minimized_ = !research_minimized_;
     }
 
     // The marker layer — the caller refills `markers` every frame.
@@ -1583,7 +1592,10 @@ void Chart::draw(
         return frame_focus == FocusedPane::All || frame_focus == pane;
     };
     const auto focus_on_double_click = [&](FocusedPane pane) {
-        if (ImPlot::IsPlotHovered()
+        // ImPlot reserves plain left double-click for fit/reset. Its default
+        // OverrideMod is Ctrl, so Ctrl+double-click is ignored by ImPlot and
+        // can safely toggle pane focus without also changing the plot range.
+        if (ImPlot::IsPlotHovered() && ImGui::GetIO().KeyCtrl
             && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             focused_pane_ = frame_focus == pane ? FocusedPane::All : pane;
     };
