@@ -57,9 +57,16 @@ namespace {
     WheelZoomIntent wheel_zoom_intent()
     {
         const ImGuiIO& io = ImGui::GetIO();
+        // IsPlotHovered() calls ImPlot::SetupLock(). This helper runs before
+        // SetupAxes() so using the public query here makes every subsequent
+        // Setup* call invalid. BeginPlot() has already established FrameRect;
+        // use that non-locking geometry for the wheel-routing decision.
+        const ImPlotPlot* plot = ImPlot::GetCurrentPlot();
+        const bool frame_hovered = plot != nullptr
+            && plot->FrameRect.Contains(io.MousePos)
+            && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
         WheelZoomIntent result;
-        result.active = ImPlot::IsPlotHovered() && io.MouseWheel != 0.0f
-            && !io.KeyCtrl;
+        result.active = frame_hovered && io.MouseWheel != 0.0f && !io.KeyCtrl;
         result.x_only = result.active && io.KeyShift && !io.KeyAlt;
         result.y_only = result.active && io.KeyAlt && !io.KeyShift;
         return result;
