@@ -337,6 +337,7 @@ private:
     bool follow_ = true;
     int snap_frames_ = 0; // >0: the seamless-switch window, all teleports
     int manual_view_frames_ = 0;
+    bool research_minimized_ = true;
     FocusedPane focused_pane_ = FocusedPane::All;
     const Series* last_series_ = nullptr; // source-switch detection
     double span_ = 0;          // viewport width in seconds; 0 = unset
