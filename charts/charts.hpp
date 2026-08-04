@@ -267,18 +267,21 @@ public:
 
     bool following() const
     {
-        return follow_;
+        return follow_ || follow_request_pending_;
     }
 
     void set_follow(bool on)
     {
-        follow_ = on;
-        // Keep the current range valid for the remainder of this frame. The
-        // in-chart follow button is processed after update_view(); poisoning
-        // the range here used to feed [x,x] into every subplot and made the
-        // chart disappear until a later frame happened to recover it.
-        if (on)
+        if (on) {
+            // The in-chart button is processed after update_view(). Defer the
+            // mode transition so no subplot sees a half-old/half-live frame.
+            follow_request_pending_ = true;
             snap_frames_ = std::max(snap_frames_, 2);
+        }
+        else {
+            follow_ = false;
+            follow_request_pending_ = false;
+        }
     }
 
     // Seamless switching: for a window of frames every easing becomes
@@ -287,7 +290,7 @@ public:
     // Default ~2s at 60fps.
     void snap_view(int frames = 120)
     {
-        follow_ = true;
+        follow_request_pending_ = true;
         snap_frames_ = std::max(1, frames);
     }
 
@@ -339,6 +342,7 @@ private:
     void takeover_check();             // drag/scroll → the user takes over
 
     bool follow_ = true;
+    bool follow_request_pending_ = false;
     int snap_frames_ = 0; // >0: the seamless-switch window, all teleports
     int manual_view_frames_ = 0;
     bool research_minimized_ = true;
