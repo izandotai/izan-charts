@@ -270,6 +270,14 @@ public:
         return follow_ || follow_request_pending_;
     }
 
+    // Read-only application hook for contextual chrome that should only be
+    // present while one chart pane occupies the full chart area. The focused
+    // pane identity remains an implementation detail of the chart.
+    bool pane_focused() const
+    {
+        return focused_pane_ != FocusedPane::All;
+    }
+
     void set_follow(bool on)
     {
         if (on) {
