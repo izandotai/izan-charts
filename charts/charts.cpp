@@ -63,9 +63,13 @@ namespace {
         // Setup* call invalid. BeginPlot() has already established FrameRect;
         // use that non-locking geometry for the wheel-routing decision.
         const ImPlotPlot* plot = ImPlot::GetCurrentPlot();
+        // Require the plot's own window to be the direct hover target. A
+        // child window may intentionally sit above the plot (for example an
+        // interactive mini-chart overlay); its wheel input must not also
+        // transfer or zoom the obscured parent chart.
         const bool frame_hovered = plot != nullptr
             && plot->FrameRect.Contains(io.MousePos)
-            && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+            && ImGui::IsWindowHovered(ImGuiHoveredFlags_None);
         WheelZoomIntent result;
         result.active = detail::wheel_zoom_requested(
             frame_hovered, io.MouseWheel, io.KeyCtrl);
