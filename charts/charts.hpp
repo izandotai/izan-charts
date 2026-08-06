@@ -278,6 +278,17 @@ public:
         return focused_pane_ != FocusedPane::All;
     }
 
+    // Screen-space data rectangle of the pane currently occupying the full
+    // chart. Axes, tick labels, subplot padding and window chrome are excluded.
+    bool focused_pane_plot_bounds(ImVec2& minimum, ImVec2& maximum) const
+    {
+        if (!focused_pane_plot_bounds_valid_)
+            return false;
+        minimum = focused_pane_plot_min_;
+        maximum = focused_pane_plot_max_;
+        return true;
+    }
+
     void set_follow(bool on)
     {
         if (on) {
@@ -357,6 +368,9 @@ private:
     bool research_minimized_ = true;
     FocusedPane focused_pane_ = FocusedPane::All;
     FocusedPane last_indicator_pane_ = FocusedPane::All;
+    bool focused_pane_plot_bounds_valid_ = false;
+    ImVec2 focused_pane_plot_min_ {};
+    ImVec2 focused_pane_plot_max_ {};
     const Series* last_series_ = nullptr; // source-switch detection
     double span_ = 0;          // viewport width in seconds; 0 = unset
     double bar_seconds_ = 60;
