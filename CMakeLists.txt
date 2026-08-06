@@ -65,8 +65,15 @@ target_include_directories(izan_charts PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(izan_charts PUBLIC izan_implot)
 
 if(PROJECT_IS_TOP_LEVEL)
+    include(CTest)
+
     # The acceptance shell: a random walk streamed live through the
     # full pane stack.
     add_executable(izan_charts_smoke WIN32 demo/smoke_main.cpp)
     target_link_libraries(izan_charts_smoke PRIVATE izan_charts)
+
+    add_executable(izan_charts_interaction_test tests/interaction_test.cpp)
+    target_include_directories(
+        izan_charts_interaction_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME izan_charts_interaction COMMAND izan_charts_interaction_test)
 endif()
