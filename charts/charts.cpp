@@ -1762,8 +1762,20 @@ void Chart::draw(
     if (!pane_available(focused_pane_) && !is_indicator_pane(focused_pane_))
         focused_pane_ = FocusedPane::All;
     const FocusedPane frame_focus = focused_pane_;
+    focused_pane_plot_bounds_valid_ = false;
     const auto visible = [&](FocusedPane pane) {
         return frame_focus == FocusedPane::All || frame_focus == pane;
+    };
+    const auto capture_focused_plot_bounds = [&](FocusedPane pane) {
+        if (frame_focus != pane)
+            return;
+        const ImVec2 minimum = ImPlot::GetPlotPos();
+        const ImVec2 size = ImPlot::GetPlotSize();
+        if (size.x <= 0.0f || size.y <= 0.0f)
+            return;
+        focused_pane_plot_min_ = minimum;
+        focused_pane_plot_max_ = ImVec2(minimum.x + size.x, minimum.y + size.y);
+        focused_pane_plot_bounds_valid_ = true;
     };
     const auto focus_on_double_click = [&](FocusedPane pane) {
         // ImPlot reserves plain left double-click for fit/reset. Its default
@@ -1803,6 +1815,7 @@ void Chart::draw(
         if (visible(FocusedPane::Main)
             && ImPlot::BeginPlot("##main", ImVec2(-1, 0), pflags)) {
             draw_main_pane(series, ind, rows == 1);
+            capture_focused_plot_bounds(FocusedPane::Main);
             focus_on_double_click(FocusedPane::Main);
             ImPlot::EndPlot();
             draw_last_price_tag();
@@ -1813,30 +1826,35 @@ void Chart::draw(
                 !ind.macd && !ind.rsi && !ind.atr
                     && (!auxiliary || auxiliary->lines.empty()),
                 switched);
+            capture_focused_plot_bounds(FocusedPane::Volume);
             focus_on_double_click(FocusedPane::Volume);
             ImPlot::EndPlot();
         }
         if (visible(FocusedPane::Macd) && ind.macd
             && ImPlot::BeginPlot("##macd", ImVec2(-1, 0), pflags)) {
             draw_macd_pane(series, ind);
+            capture_focused_plot_bounds(FocusedPane::Macd);
             focus_on_double_click(FocusedPane::Macd);
             ImPlot::EndPlot();
         }
         if (visible(FocusedPane::Rsi) && ind.rsi
             && ImPlot::BeginPlot("##rsi", ImVec2(-1, 0), pflags)) {
             draw_rsi_pane(series, ind);
+            capture_focused_plot_bounds(FocusedPane::Rsi);
             focus_on_double_click(FocusedPane::Rsi);
             ImPlot::EndPlot();
         }
         if (visible(FocusedPane::Atr) && ind.atr
             && ImPlot::BeginPlot("##atr", ImVec2(-1, 0), pflags)) {
             draw_atr_pane(series, ind);
+            capture_focused_plot_bounds(FocusedPane::Atr);
             focus_on_double_click(FocusedPane::Atr);
             ImPlot::EndPlot();
         }
         if (visible(FocusedPane::Auxiliary) && auxiliary && !auxiliary->lines.empty()
             && ImPlot::BeginPlot("##auxiliary", ImVec2(-1, 0), pflags)) {
             draw_auxiliary_pane(series, *auxiliary);
+            capture_focused_plot_bounds(FocusedPane::Auxiliary);
             focus_on_double_click(FocusedPane::Auxiliary);
             ImPlot::EndPlot();
         }
