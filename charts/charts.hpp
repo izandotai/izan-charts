@@ -347,7 +347,7 @@ private:
     void draw_leverage_regime_layer(const ImPlotRect& limits);
     void draw_last_price_tag();
     void update_view(const Series& s); // eased advance while following
-    void takeover_check();             // drag/scroll → the user takes over
+    void takeover_check(bool wheel_zoom_active = false); // drag/scroll → user takeover
 
     bool follow_ = true;
     bool follow_request_pending_ = false;

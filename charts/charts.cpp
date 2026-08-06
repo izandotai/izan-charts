@@ -1,4 +1,5 @@
 #include "charts/charts.hpp"
+#include "charts/interaction.hpp"
 
 #include <implot_internal.h> // BeginItem/EndItem/FitPoint for custom glyphs
 
@@ -66,7 +67,8 @@ namespace {
             && plot->FrameRect.Contains(io.MousePos)
             && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
         WheelZoomIntent result;
-        result.active = frame_hovered && io.MouseWheel != 0.0f && !io.KeyCtrl;
+        result.active = detail::wheel_zoom_requested(
+            frame_hovered, io.MouseWheel, io.KeyCtrl);
         result.x_only = result.active && io.KeyShift && !io.KeyAlt;
         result.y_only = result.active && io.KeyAlt && !io.KeyShift;
         return result;
@@ -400,11 +402,16 @@ namespace {
 
 // ---------- Chart ----------
 
-void Chart::takeover_check()
+void Chart::takeover_check(bool wheel_zoom_active)
 {
-    if (ImPlot::IsPlotHovered() && !ImGui::GetIO().KeyCtrl
-        && (ImGui::IsMouseDragging(ImGuiMouseButton_Left)
-            || ImGui::GetIO().MouseWheel != 0.0f)) {
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool plot_dragged = ImPlot::IsPlotHovered()
+        && ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+    // IsPlotHovered() only covers the data canvas. ImPlot also accepts wheel
+    // zoom over the X/Y axis regions, so use the pre-setup frame hit-test
+    // propagated by wheel_zoom_intent() to relinquish follow mode there too.
+    if (detail::viewport_takeover_requested(
+            plot_dragged, wheel_zoom_active, io.KeyCtrl)) {
         follow_ = false;
         follow_request_pending_ = false;
     }
@@ -1465,7 +1472,7 @@ void Chart::draw_main_pane(
     draw_expiry_risk_hud();
     draw_venue_race_layer();
 
-    takeover_check();
+    takeover_check(zoom.active);
     if (!follow_) {
         vx0_ = lim.X.Min;
         vx1_ = lim.X.Max;
@@ -1529,7 +1536,7 @@ void Chart::draw_volume_pane(
     if (!zoom.active && (follow_ || manual_view_frames_ > 0))
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
     plot_volume("##vol", s.bars(), s.bar_seconds(), theme.bull, theme.bear);
-    takeover_check();
+    takeover_check(zoom.active);
 }
 
 void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
@@ -1612,7 +1619,7 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
                 ImGui::GetColorU32(ImGuiCol_TextDisabled), buf);
         }
     }
-    takeover_check();
+    takeover_check(zoom.active);
 }
 
 void Chart::draw_rsi_pane(const Series& s, const IndicatorSet& ind)
@@ -1636,7 +1643,7 @@ void Chart::draw_rsi_pane(const Series& s, const IndicatorSet& ind)
     spec.LineWeight = 1.0f;
     spec.Flags = ImPlotInfLinesFlags_Horizontal;
     ImPlot::PlotInfLines("##rsi-guides", guides, 3, spec);
-    takeover_check();
+    takeover_check(zoom.active);
 }
 
 void Chart::draw_atr_pane(const Series& s, const IndicatorSet& ind)
@@ -1655,7 +1662,7 @@ void Chart::draw_atr_pane(const Series& s, const IndicatorSet& ind)
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
     plot_line("ATR", ind.x, ind.atr_v,
         ImVec4(0.95f, 0.65f, 0.20f, 1.0f), 1.5f);
-    takeover_check();
+    takeover_check(zoom.active);
 }
 
 void Chart::draw_auxiliary_pane(const Series&, const AuxiliaryPane& pane)
@@ -1689,7 +1696,7 @@ void Chart::draw_auxiliary_pane(const Series&, const AuxiliaryPane& pane)
     ImPlot::GetPlotDrawList()->AddText(
         ImVec2(pos.x + 10.0f, pos.y + 6.0f),
         ImGui::GetColorU32(ImGuiCol_TextDisabled), pane.title.c_str());
-    takeover_check();
+    takeover_check(zoom.active);
 }
 
 void Chart::draw(
