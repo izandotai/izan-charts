@@ -1595,6 +1595,7 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
             ImPlot::PopPlotClipRect();
         }
     }
+    draw_macd_outcome_layer();
     plot_hist("##macd-hist", ind.x, ind.macd_hist, s.bar_seconds(), theme.bull,
         theme.bear);
     plot_line("##macd-dif", ind.x, ind.macd_dif, theme.macd_dif, 1.5f);
@@ -1625,6 +1626,66 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
         }
     }
     takeover_check(zoom.active);
+}
+
+void Chart::draw_macd_outcome_layer()
+{
+    if (!macd_outcomes.enabled || macd_outcomes.windows.empty())
+        return;
+
+    const ImPlotRect limits = ImPlot::GetPlotLimits();
+    const ImVec2 plot_pos = ImPlot::GetPlotPos();
+    const ImVec2 plot_size = ImPlot::GetPlotSize();
+    ImDrawList* draw_list = ImPlot::GetPlotDrawList();
+    draw_list->Flags |= ImDrawListFlags_AntiAliasedLines
+        | ImDrawListFlags_AntiAliasedLinesUseTex;
+
+    ImPlot::PushPlotClipRect();
+    for (const MacdWindowOutcome& outcome : macd_outcomes.windows) {
+        if (outcome.window_end_t <= outcome.window_start_t)
+            continue;
+        const double x0 = std::max(limits.X.Min, outcome.window_start_t);
+        const double x1 = std::min(limits.X.Max, outcome.window_end_t);
+        if (x1 <= x0)
+            continue;
+
+        const float px0 = ImPlot::PlotToPixels(x0, limits.Y.Min).x;
+        const float px1 = ImPlot::PlotToPixels(x1, limits.Y.Min).x;
+        ImVec4 color = outcome.direction_up ? theme.bull : theme.bear;
+        const float confidence = static_cast<float>(
+            std::clamp(outcome.confidence, 0.0, 1.0));
+        ImVec4 fill = color;
+        fill.w = 0.035f + 0.025f * confidence;
+        ImVec4 edge = color;
+        edge.w = 0.30f + 0.25f * confidence;
+        ImVec4 strip = color;
+        strip.w = 0.72f;
+
+        draw_list->AddRectFilled(ImVec2(px0, plot_pos.y),
+            ImVec2(px1, plot_pos.y + plot_size.y), ImGui::GetColorU32(fill));
+        draw_list->AddLine(ImVec2(px0, plot_pos.y),
+            ImVec2(px0, plot_pos.y + plot_size.y), ImGui::GetColorU32(edge),
+            1.0f);
+        draw_list->AddRectFilled(ImVec2(px0, plot_pos.y + plot_size.y - 3.0f),
+            ImVec2(px1, plot_pos.y + plot_size.y), ImGui::GetColorU32(strip));
+
+        constexpr const char* up_label = "UP WIN";
+        constexpr const char* down_label = "DN WIN";
+        const char* label = outcome.direction_up ? up_label : down_label;
+        const ImVec2 text_size = ImGui::CalcTextSize(label);
+        if (px1 - px0 >= text_size.x + 12.0f) {
+            const ImVec2 label_min(
+                px0 + (px1 - px0 - text_size.x) * 0.5f - 4.0f,
+                plot_pos.y + plot_size.y - text_size.y - 9.0f);
+            const ImVec2 label_max(label_min.x + text_size.x + 8.0f,
+                label_min.y + text_size.y + 4.0f);
+            draw_list->AddRectFilled(label_min, label_max,
+                IM_COL32(12, 15, 22, 190), 3.0f);
+            draw_list->AddText(ImVec2(label_min.x + 4.0f, label_min.y + 2.0f),
+                ImGui::GetColorU32(color), label);
+        }
+    }
+    ImPlot::PopPlotClipRect();
 }
 
 void Chart::draw_macd_energy_layer(const Series& s, const IndicatorSet& ind)

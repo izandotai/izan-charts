@@ -177,6 +177,21 @@ struct MacdEnergyLayer {
     double window_end_t = 0;
 };
 
+// Settled binary-market outcomes aligned to the MACD time axis.  Applications
+// own settlement semantics; the chart only groups the one-minute energy bars
+// into exact market windows and paints a compact result band behind them.
+struct MacdWindowOutcome {
+    double window_start_t = 0;
+    double window_end_t = 0;
+    bool direction_up = false;
+    double confidence = 1.0;
+};
+
+struct MacdOutcomeLayer {
+    bool enabled = false;
+    std::vector<MacdWindowOutcome> windows;
+};
+
 // Independent application-fed layers. Each layer is optional and has no
 // ownership of the market data that produced it, so one unavailable layer
 // cannot disturb candles, indicators, or another overlay.
@@ -331,6 +346,7 @@ public:
     std::optional<AuxiliaryPane> auxiliary;
     ResearchOverlay research;
     MacdEnergyLayer macd_energy;
+    MacdOutcomeLayer macd_outcomes;
     ExpiryRiskLayer expiry_risk;
     VenueRaceLayer venue_race;
     RtdsPriceLayer rtds_price;
@@ -360,6 +376,7 @@ private:
         const Series& s, const IndicatorSet& ind, bool bottom, bool switched);
     void draw_macd_pane(const Series& s, const IndicatorSet& ind);
     void draw_macd_energy_layer(const Series& s, const IndicatorSet& ind);
+    void draw_macd_outcome_layer();
     void draw_rsi_pane(const Series& s, const IndicatorSet& ind);
     void draw_atr_pane(const Series& s, const IndicatorSet& ind);
     void draw_auxiliary_pane(const Series& s, const AuxiliaryPane& pane);
