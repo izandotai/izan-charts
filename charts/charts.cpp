@@ -1561,7 +1561,9 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
             | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_LockMin
             | ImPlotAxisFlags_LockMax;
         ImPlot::SetupAxis(ImAxis_Y2, nullptr, super_flags);
-        ImPlot::SetupAxisLimits(ImAxis_Y2, -105.0, 105.0,
+        const double extent = super_macd_visible_extent(
+            super_macd.points, vx0_, vx1_);
+        ImPlot::SetupAxisLimits(ImAxis_Y2, -extent, extent,
             ImGuiCond_Always);
     }
     ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
@@ -1608,6 +1610,7 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
     draw_macd_outcome_layer();
     plot_hist("##macd-hist", ind.x, ind.macd_hist, s.bar_seconds(), theme.bull,
         theme.bear);
+    draw_macd_outcome_bar_markers(s, ind);
     plot_line("##macd-dif", ind.x, ind.macd_dif, theme.macd_dif, 1.5f);
     plot_line("##macd-dea", ind.x, ind.macd_dea, theme.macd_dea, 1.5f);
     draw_super_macd_layer();
@@ -1732,7 +1735,7 @@ void Chart::draw_super_macd_layer()
             ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
     ImPlot::PlotLine("##super-macd-raw", x.data(), raw.data(),
         static_cast<int>(x.size()),
-        { ImPlotProp_LineColor, raw_color, ImPlotProp_LineWeight, 1.0f,
+        { ImPlotProp_LineColor, raw_color, ImPlotProp_LineWeight, 1.25f,
             ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
     ImPlot::PlotLine("##super-macd-smooth", x.data(), smooth.data(),
         static_cast<int>(x.size()),
@@ -1812,8 +1815,12 @@ void Chart::draw_super_macd_layer()
             latest.same_direction_duration_seconds,
             latest.same_direction_residence_30s * 100.0);
         const ImVec2 size = ImGui::CalcTextSize(badge);
+        // Row 1 belongs to the native MACD readout and energy/countdown HUD.
+        // Super MACD always occupies its own second row so neither readout can
+        // cover the other, even on a narrow maximized pane.
+        const float second_row_y = plot_pos.y + ImGui::GetFontSize() + 14.0f;
         const ImVec2 minimum(plot_pos.x + plot_size.x - size.x - 18.0f,
-            plot_pos.y + 6.0f);
+            second_row_y);
         const ImVec2 maximum(minimum.x + size.x + 12.0f,
             minimum.y + size.y + 6.0f);
         ImVec4 badge_color = latest.direction > 0 ? theme.bull
@@ -1909,6 +1916,61 @@ void Chart::draw_macd_outcome_layer()
             draw_list->AddText(ImVec2(label_min.x + 4.0f, label_min.y + 2.0f),
                 ImGui::GetColorU32(color), label);
         }
+    }
+    ImPlot::PopPlotClipRect();
+}
+
+void Chart::draw_macd_outcome_bar_markers(
+    const Series& s, const IndicatorSet& ind)
+{
+    if (!macd_outcomes.enabled || macd_outcomes.windows.empty()
+        || ind.x.empty() || ind.macd_hist.size() != ind.x.size())
+        return;
+
+    const ImPlotRect limits = ImPlot::GetPlotLimits();
+    ImDrawList* draw_list = ImPlot::GetPlotDrawList();
+    const double half_bar = s.bar_seconds() * 0.5;
+    const ImU32 outline = IM_COL32(10, 13, 19, 225);
+
+    // One compact result cap per 1m energy bar.  The cap sits just beyond the
+    // histogram endpoint, leaving the endpoint itself free for the existing
+    // energy expansion/contraction marker.  The full-window result strip and
+    // UP WIN / DN WIN badge remain the text legend for these deliberately
+    // minimal per-bar marks.
+    ImPlot::PushPlotClipRect();
+    for (std::size_t i = 0; i < ind.x.size(); ++i) {
+        const double histogram = ind.macd_hist[i];
+        if (!std::isfinite(histogram))
+            continue;
+        const double center = ind.x[i] + half_bar;
+        if (center < limits.X.Min || center > limits.X.Max)
+            continue;
+
+        const auto outcome = std::find_if(macd_outcomes.windows.begin(),
+            macd_outcomes.windows.end(), [&](const MacdWindowOutcome& item) {
+                return item.window_end_t > item.window_start_t
+                    && center >= item.window_start_t
+                    && center < item.window_end_t;
+            });
+        if (outcome == macd_outcomes.windows.end())
+            continue;
+
+        ImVec4 color = outcome->direction_up ? theme.bull : theme.bear;
+        color.w = 0.82f + 0.16f * static_cast<float>(
+            std::clamp(outcome->confidence, 0.0, 1.0));
+        const ImVec2 endpoint = ImPlot::PlotToPixels(center, histogram);
+        constexpr float half_width = 4.5f;
+        constexpr float half_height = 2.0f;
+        constexpr float endpoint_clearance = 7.0f;
+        const float direction = histogram >= 0.0 ? -1.0f : 1.0f;
+        const float marker_y = endpoint.y + direction * endpoint_clearance;
+        const ImVec2 marker_min(
+            endpoint.x - half_width, marker_y - half_height);
+        const ImVec2 marker_max(
+            endpoint.x + half_width, marker_y + half_height);
+        draw_list->AddRectFilled(marker_min, marker_max,
+            ImGui::GetColorU32(color), 1.5f);
+        draw_list->AddRect(marker_min, marker_max, outline, 1.5f, 0, 1.0f);
     }
     ImPlot::PopPlotClipRect();
 }

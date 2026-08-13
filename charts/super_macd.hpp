@@ -66,4 +66,35 @@ inline std::vector<double> super_macd_causal_smoothing(
     return result;
 }
 
+// Choose a readable hidden-axis extent without changing the score itself.
+// The axis remains symmetric around zero so UP/DOWN semantics stay stable,
+// while ordinary +/-10..30 point paths are not crushed into a few pixels.
+inline double super_macd_visible_extent(
+    std::span<const SuperMacdMomentumPoint> points,
+    double visible_min_t,
+    double visible_max_t,
+    double minimum_extent_points = 20.0)
+{
+    double maximum_strength = 0.0;
+    bool has_visible_point = false;
+    for (const auto& point : points) {
+        if (!std::isfinite(point.t) || !std::isfinite(point.score)
+            || point.t < visible_min_t || point.t > visible_max_t)
+            continue;
+        maximum_strength = std::max(maximum_strength, std::abs(point.score));
+        has_visible_point = true;
+    }
+    if (!has_visible_point) {
+        for (const auto& point : points) {
+            if (std::isfinite(point.score))
+                maximum_strength =
+                    std::max(maximum_strength, std::abs(point.score));
+        }
+    }
+    const double minimum = std::clamp(
+        std::isfinite(minimum_extent_points) ? minimum_extent_points : 20.0,
+        5.0, 105.0);
+    return std::clamp(maximum_strength * 1.22, minimum, 105.0);
+}
+
 } // namespace izan::charts

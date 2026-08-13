@@ -382,6 +382,8 @@ private:
     void draw_macd_pane(const Series& s, const IndicatorSet& ind);
     void draw_macd_energy_layer(const Series& s, const IndicatorSet& ind);
     void draw_macd_outcome_layer();
+    void draw_macd_outcome_bar_markers(
+        const Series& s, const IndicatorSet& ind);
     void draw_super_macd_layer();
     void draw_rsi_pane(const Series& s, const IndicatorSet& ind);
     void draw_atr_pane(const Series& s, const IndicatorSet& ind);

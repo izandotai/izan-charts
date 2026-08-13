@@ -30,4 +30,17 @@ int main()
     const auto duplicate =
         izan::charts::super_macd_causal_smoothing(points, 1.0);
     assert(duplicate.back() == duplicate[duplicate.size() - 2]);
+
+    // Visible-axis scaling expands ordinary scores without changing them and
+    // remains bounded for extreme inputs.
+    const double normal_extent = izan::charts::super_macd_visible_extent(
+        points, 1.0, 3.0);
+    assert(normal_extent == 105.0); // the visible sample includes +100
+    std::vector<SuperMacdMomentumPoint> ordinary{
+        { .t = 1.0, .score = -18.0 },
+        { .t = 2.0, .score = -24.0 },
+    };
+    const double ordinary_extent = izan::charts::super_macd_visible_extent(
+        ordinary, 1.0, 2.0);
+    assert(ordinary_extent > 29.0 && ordinary_extent < 30.0);
 }
