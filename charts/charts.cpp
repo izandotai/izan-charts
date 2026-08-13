@@ -1786,8 +1786,10 @@ void Chart::draw_macd_energy_layer(const Series& s, const IndicatorSet& ind)
         const ImVec2 center(
             plot_pos.x + plot_size.x - countdown_radius - 7.0f,
             plot_pos.y + countdown_radius + 4.0f);
+        const ImVec4 axis_grid =
+            ImPlot::GetStyle().Colors[ImPlotCol_AxisGrid];
         const ImU32 track = ImGui::GetColorU32(
-            ImVec4(theme.grid.x, theme.grid.y, theme.grid.z, 0.72f));
+            ImVec4(axis_grid.x, axis_grid.y, axis_grid.z, 0.72f));
         const ImU32 active = ImGui::GetColorU32(
             ImVec4(color.x, color.y, color.z, 0.96f));
         draw_list->AddCircleFilled(center, countdown_radius - 3.0f,
