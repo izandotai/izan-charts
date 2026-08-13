@@ -1770,43 +1770,56 @@ void Chart::draw_macd_energy_layer(const Series& s, const IndicatorSet& ind)
     const ImVec2 size = ImGui::CalcTextSize(text);
     const MacdBarCountdown countdown =
         macd_bar_countdown(macd_energy.current_time_t, 60.0);
-    constexpr float countdown_radius = 12.0f;
-    constexpr float countdown_gap = 8.0f;
+    const float ui_font_size = ImGui::GetFontSize();
+    const float countdown_radius =
+        std::clamp(ui_font_size * 0.88f, 18.0f, 23.0f);
+    const float countdown_font_size =
+        std::clamp(ui_font_size * 0.56f, 10.0f, 14.0f);
+    const float countdown_gap = std::max(8.0f, ui_font_size * 0.34f);
+    const float hud_top_margin = std::max(6.0f, ui_font_size * 0.24f);
+    const float hud_right_margin = std::max(10.0f, ui_font_size * 0.40f);
     const float countdown_reserved = countdown.available()
         ? countdown_radius * 2.0f + countdown_gap : 0.0f;
     const ImVec2 origin(
         std::max(plot_pos.x + 10.0f,
-            plot_pos.x + plot_size.x - size.x - 10.0f - countdown_reserved),
-        plot_pos.y + 6.0f);
+            plot_pos.x + plot_size.x - size.x - hud_right_margin
+                - countdown_reserved),
+        plot_pos.y + hud_top_margin);
     const ImVec4 color =
         ind.macd_hist[latest_index] >= 0.0 ? theme.bull : theme.bear;
     draw_list->AddText(origin, ImGui::GetColorU32(color), text);
 
     if (countdown.available()) {
         const ImVec2 center(
-            plot_pos.x + plot_size.x - countdown_radius - 7.0f,
-            plot_pos.y + countdown_radius + 4.0f);
+            plot_pos.x + plot_size.x - hud_right_margin - countdown_radius,
+            plot_pos.y + hud_top_margin + countdown_radius);
         const ImVec4 axis_grid =
             ImPlot::GetStyle().Colors[ImPlotCol_AxisGrid];
         const ImU32 track = ImGui::GetColorU32(
             ImVec4(axis_grid.x, axis_grid.y, axis_grid.z, 0.72f));
         const ImU32 active = ImGui::GetColorU32(
             ImVec4(color.x, color.y, color.z, 0.96f));
-        draw_list->AddCircleFilled(center, countdown_radius - 3.0f,
-            IM_COL32(12, 15, 22, 176), 28);
-        draw_list->AddCircle(center, countdown_radius, track, 32, 2.0f);
+        const float track_width =
+            std::clamp(countdown_radius * 0.14f, 2.4f, 3.2f);
+        draw_list->AddCircleFilled(center, countdown_radius - track_width,
+            IM_COL32(12, 15, 22, 176), 40);
+        draw_list->AddCircle(
+            center, countdown_radius, track, 40, track_width);
         constexpr float pi = 3.14159265358979323846f;
         const float start = -0.5f * pi;
         const float end = start
             + 2.0f * pi * static_cast<float>(countdown.elapsed_fraction);
         if (end > start + 1e-4f) {
-            draw_list->PathArcTo(center, countdown_radius, start, end, 32);
-            draw_list->PathStroke(active, 0, 2.4f);
+            draw_list->PathArcTo(center, countdown_radius, start, end, 40);
+            draw_list->PathStroke(active, 0, track_width);
         }
         char seconds[8];
         std::snprintf(seconds, sizeof seconds, "%d", countdown.display_seconds);
-        const ImVec2 seconds_size = ImGui::CalcTextSize(seconds);
-        draw_list->AddText(
+        ImFont* countdown_font = ImGui::GetFont();
+        const ImVec2 seconds_size = countdown_font->CalcTextSizeA(
+            countdown_font_size, std::numeric_limits<float>::max(), 0.0f,
+            seconds);
+        draw_list->AddText(countdown_font, countdown_font_size,
             ImVec2(center.x - seconds_size.x * 0.5f,
                 center.y - seconds_size.y * 0.5f),
             ImGui::GetColorU32(ImVec4(0.92f, 0.94f, 0.98f, 0.96f)), seconds);
