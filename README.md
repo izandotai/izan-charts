@@ -19,6 +19,10 @@ floor — lines, bars, axes; this library adds the financial storey:
 - **Optional MACD energy layer** — compares each one-minute histogram bar with
   its predecessor inside a host-supplied market window, marking bullish/bearish
   expansion, contraction and zero crosses without changing indicator values.
+- **Optional Super MACD context layer** - overlays an application-fed bounded
+  score, causal time-aware smoothing, momentum ticks, regimes, drawdown and
+  effective zero-cross markers on an independent hidden Y axis. It cannot
+  alter MACD values, fitting, zoom, pan, follow or reset state.
 - **Event markers** and a reference-price line for the application to
   pin its own story onto the tape
 

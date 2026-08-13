@@ -81,4 +81,9 @@ if(PROJECT_IS_TOP_LEVEL)
     target_include_directories(
         izan_charts_macd_energy_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(NAME izan_charts_macd_energy COMMAND izan_charts_macd_energy_test)
+
+    add_executable(izan_charts_super_macd_test tests/super_macd_test.cpp)
+    target_include_directories(
+        izan_charts_super_macd_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME izan_charts_super_macd COMMAND izan_charts_super_macd_test)
 endif()

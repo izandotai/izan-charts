@@ -1554,6 +1554,16 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
         yflags |= ImPlotAxisFlags_AutoFit;
     yflags = interactive_y_flags(yflags, zoom);
     ImPlot::SetupAxes(nullptr, nullptr, xflags, yflags);
+    if (super_macd.enabled) {
+        constexpr ImPlotAxisFlags super_flags =
+            ImPlotAxisFlags_NoLabel | ImPlotAxisFlags_NoTickLabels
+            | ImPlotAxisFlags_NoTickMarks | ImPlotAxisFlags_NoGridLines
+            | ImPlotAxisFlags_NoMenus | ImPlotAxisFlags_LockMin
+            | ImPlotAxisFlags_LockMax;
+        ImPlot::SetupAxis(ImAxis_Y2, nullptr, super_flags);
+        ImPlot::SetupAxisLimits(ImAxis_Y2, -105.0, 105.0,
+            ImGuiCond_Always);
+    }
     ImPlot::SetupAxisFormat(ImAxis_X1, fmt_hms, nullptr);
     if (!zoom.active && (follow_ || manual_view_frames_ > 0))
         ImPlot::SetupAxisLimits(ImAxis_X1, vx0_, vx1_, ImGuiCond_Always);
@@ -1600,6 +1610,7 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
         theme.bear);
     plot_line("##macd-dif", ind.x, ind.macd_dif, theme.macd_dif, 1.5f);
     plot_line("##macd-dea", ind.x, ind.macd_dea, theme.macd_dea, 1.5f);
+    draw_super_macd_layer();
     draw_macd_energy_layer(s, ind);
 
     // The readout: DIF / DEA / HIST.
@@ -1626,6 +1637,220 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
         }
     }
     takeover_check(zoom.active);
+}
+
+namespace {
+
+const char* composite_regime_label(CompositeMomentumRegime regime)
+{
+    switch (regime) {
+    case CompositeMomentumRegime::Warming:
+        return "WARMING";
+    case CompositeMomentumRegime::Weak:
+        return "WEAK";
+    case CompositeMomentumRegime::Building:
+        return "BUILDING";
+    case CompositeMomentumRegime::Persistent:
+        return "PERSISTENT";
+    case CompositeMomentumRegime::Fading:
+        return "FADING";
+    case CompositeMomentumRegime::Choppy:
+        return "CHOPPY";
+    case CompositeMomentumRegime::Transitional:
+        return "TRANSITION";
+    case CompositeMomentumRegime::Unavailable:
+        break;
+    }
+    return "N/A";
+}
+
+ImVec4 composite_regime_color(CompositeMomentumRegime regime,
+    const Theme& theme)
+{
+    switch (regime) {
+    case CompositeMomentumRegime::Building:
+        return ImVec4(0.16f, 0.78f, 0.62f, 0.78f);
+    case CompositeMomentumRegime::Persistent:
+        return theme.bull;
+    case CompositeMomentumRegime::Fading:
+        return ImVec4(0.96f, 0.64f, 0.18f, 0.78f);
+    case CompositeMomentumRegime::Choppy:
+        return theme.bear;
+    case CompositeMomentumRegime::Transitional:
+        return ImVec4(0.58f, 0.48f, 0.90f, 0.72f);
+    case CompositeMomentumRegime::Warming:
+    case CompositeMomentumRegime::Weak:
+    case CompositeMomentumRegime::Unavailable:
+        return ImVec4(0.48f, 0.52f, 0.62f, 0.58f);
+    }
+    return ImVec4(0.48f, 0.52f, 0.62f, 0.58f);
+}
+
+} // namespace
+
+void Chart::draw_super_macd_layer()
+{
+    if (!super_macd.enabled || super_macd.points.size() < 2)
+        return;
+
+    std::vector<SuperMacdMomentumPoint> points;
+    points.reserve(super_macd.points.size());
+    for (const auto& point : super_macd.points) {
+        if (!std::isfinite(point.t) || !std::isfinite(point.score)
+            || (!points.empty() && point.t <= points.back().t))
+            continue;
+        points.push_back(point);
+    }
+    if (points.size() < 2)
+        return;
+
+    std::vector<double> x;
+    std::vector<double> raw;
+    std::vector<double> peak;
+    x.reserve(points.size());
+    raw.reserve(points.size());
+    peak.reserve(points.size());
+    for (const auto& point : points) {
+        const double score = std::clamp(point.score, -100.0, 100.0);
+        x.push_back(point.t);
+        raw.push_back(score);
+        peak.push_back(std::clamp(
+            score + point.direction
+                    * point.drawdown_from_segment_peak_points,
+            -100.0, 100.0));
+    }
+    const auto smooth = super_macd_causal_smoothing(
+        points, super_macd.smoothing_time_constant_seconds);
+
+    ImPlot::SetAxes(ImAxis_X1, ImAxis_Y2);
+    const ImVec4 raw_color(0.70f, 0.50f, 0.96f, 0.48f);
+    const ImVec4 smooth_color(0.54f, 0.82f, 1.00f, 0.88f);
+    ImVec4 drawdown_color(0.96f, 0.60f, 0.20f, 0.12f);
+    ImPlot::PlotShaded("##super-macd-drawdown", x.data(), raw.data(),
+        peak.data(), static_cast<int>(x.size()),
+        { ImPlotProp_FillColor, drawdown_color,
+            ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
+    ImPlot::PlotLine("##super-macd-raw", x.data(), raw.data(),
+        static_cast<int>(x.size()),
+        { ImPlotProp_LineColor, raw_color, ImPlotProp_LineWeight, 1.0f,
+            ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
+    ImPlot::PlotLine("##super-macd-smooth", x.data(), smooth.data(),
+        static_cast<int>(x.size()),
+        { ImPlotProp_LineColor, smooth_color, ImPlotProp_LineWeight, 1.8f,
+            ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
+
+    std::vector<double> crossing_x;
+    std::vector<double> crossing_y;
+    for (std::size_t index = 1; index < points.size(); ++index) {
+        if (points[index].effective_zero_crossings_60s
+                > points[index - 1].effective_zero_crossings_60s
+            || (points[index].direction != 0
+                && points[index - 1].direction != 0
+                && points[index].direction != points[index - 1].direction)) {
+            crossing_x.push_back(points[index].t);
+            crossing_y.push_back(raw[index]);
+        }
+    }
+    if (!crossing_x.empty()) {
+        ImPlot::PlotScatter("##super-macd-cross", crossing_x.data(),
+            crossing_y.data(), static_cast<int>(crossing_x.size()),
+            { ImPlotProp_LineColor, ImVec4(0.98f, 0.76f, 0.24f, 0.95f),
+                ImPlotProp_Marker, ImPlotMarker_Diamond,
+                ImPlotProp_MarkerSize, 4.5f,
+                ImPlotProp_MarkerFillColor,
+                ImVec4(0.98f, 0.76f, 0.24f, 0.90f),
+                ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
+    }
+
+    ImDrawList* draw_list = ImPlot::GetPlotDrawList();
+    draw_list->Flags |= ImDrawListFlags_AntiAliasedLines
+        | ImDrawListFlags_AntiAliasedLinesUseTex;
+    const ImPlotRect limits = ImPlot::GetPlotLimits(ImAxis_X1, ImAxis_Y2);
+    const ImVec2 plot_pos = ImPlot::GetPlotPos();
+    const ImVec2 plot_size = ImPlot::GetPlotSize();
+    const float band_top = plot_pos.y + plot_size.y - 5.0f;
+    ImPlot::PushPlotClipRect();
+    for (std::size_t index = 0; index < points.size(); ++index) {
+        if (points[index].t < limits.X.Min || points[index].t > limits.X.Max)
+            continue;
+        const float px = ImPlot::PlotToPixels(
+            points[index].t, raw[index], ImAxis_X1, ImAxis_Y2).x;
+        float next_px = px + 2.0f;
+        if (index + 1 < points.size()) {
+            next_px = ImPlot::PlotToPixels(points[index + 1].t,
+                raw[index], ImAxis_X1, ImAxis_Y2).x;
+        }
+        ImVec4 regime = composite_regime_color(points[index].regime, theme);
+        regime.w *= 0.58f;
+        draw_list->AddRectFilled(ImVec2(px, band_top),
+            ImVec2(std::max(px + 1.0f, next_px), band_top + 4.0f),
+            ImGui::GetColorU32(regime));
+
+        if (index == 0 || !points[index].available)
+            continue;
+        const double directed_velocity = points[index].direction
+            * points[index].velocity_5s_points_per_second;
+        const float height = static_cast<float>(std::clamp(
+            std::abs(points[index].velocity_5s_points_per_second) * 2.8,
+            1.0, 13.0));
+        ImVec4 momentum = directed_velocity >= 0.0
+            ? ImVec4(0.20f, 0.76f, 0.64f, 0.28f)
+            : ImVec4(0.96f, 0.48f, 0.34f, 0.30f);
+        draw_list->AddRectFilled(ImVec2(px - 0.8f, band_top - height),
+            ImVec2(px + 0.8f, band_top), ImGui::GetColorU32(momentum));
+    }
+    ImPlot::PopPlotClipRect();
+
+    const auto& latest = points.back();
+    if (latest.t >= limits.X.Min && latest.t <= limits.X.Max) {
+        char badge[128];
+        const char* direction = latest.direction > 0
+            ? "UP"
+            : latest.direction < 0 ? "DOWN" : "WEAK";
+        std::snprintf(badge, sizeof badge, "CMP %s %+.0f  %s  %.0fs  R%.0f%%",
+            direction, latest.score, composite_regime_label(latest.regime),
+            latest.same_direction_duration_seconds,
+            latest.same_direction_residence_30s * 100.0);
+        const ImVec2 size = ImGui::CalcTextSize(badge);
+        const ImVec2 minimum(plot_pos.x + plot_size.x - size.x - 18.0f,
+            plot_pos.y + 6.0f);
+        const ImVec2 maximum(minimum.x + size.x + 12.0f,
+            minimum.y + size.y + 6.0f);
+        ImVec4 badge_color = latest.direction > 0 ? theme.bull
+            : latest.direction < 0 ? theme.bear
+                                   : ImVec4(0.55f, 0.60f, 0.70f, 0.90f);
+        draw_list->AddRectFilled(minimum, maximum, IM_COL32(12, 16, 24, 205),
+            4.0f);
+        draw_list->AddRect(minimum, maximum, ImGui::GetColorU32(badge_color),
+            4.0f, 0, 1.0f);
+        draw_list->AddText(ImVec2(minimum.x + 6.0f, minimum.y + 3.0f),
+            ImGui::GetColorU32(badge_color), badge);
+    }
+
+    if (ImPlot::IsPlotHovered()) {
+        const double mouse_t = ImPlot::GetPlotMousePos(
+            ImAxis_X1, ImAxis_Y2).x;
+        const auto nearest = std::min_element(points.begin(), points.end(),
+            [mouse_t](const auto& left, const auto& right) {
+                return std::abs(left.t - mouse_t)
+                    < std::abs(right.t - mouse_t);
+            });
+        if (nearest != points.end()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("SUPER MACD COMPOSITE  %+.1f", nearest->score);
+            ImGui::Separator();
+            ImGui::Text("v5 %+.2f pt/s   residence30 %.0f%%",
+                nearest->velocity_5s_points_per_second,
+                nearest->same_direction_residence_30s * 100.0);
+            ImGui::Text("duration %.1fs   drawdown %.1fpt   cross60 %u",
+                nearest->same_direction_duration_seconds,
+                nearest->drawdown_from_segment_peak_points,
+                nearest->effective_zero_crossings_60s);
+            ImGui::Text("regime %s", composite_regime_label(nearest->regime));
+            ImGui::EndTooltip();
+        }
+    }
+    ImPlot::SetAxes(ImAxis_X1, ImAxis_Y1);
 }
 
 void Chart::draw_macd_outcome_layer()
