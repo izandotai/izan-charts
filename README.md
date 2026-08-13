@@ -16,6 +16,9 @@ floor — lines, bars, axes; this library adds the financial storey:
   live edge again without exposing an invalid intermediate range
 - **Fast antialiased curves** — integer-width, atlas-textured line rendering
   keeps EMA, Bollinger, MACD and auxiliary plots crisp without MSAA overhead
+- **Optional MACD energy layer** — compares each one-minute histogram bar with
+  its predecessor inside a host-supplied market window, marking bullish/bearish
+  expansion, contraction and zero crosses without changing indicator values.
 - **Event markers** and a reference-price line for the application to
   pin its own story onto the tape
 

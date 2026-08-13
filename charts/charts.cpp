@@ -1599,6 +1599,7 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
         theme.bear);
     plot_line("##macd-dif", ind.x, ind.macd_dif, theme.macd_dif, 1.5f);
     plot_line("##macd-dea", ind.x, ind.macd_dea, theme.macd_dea, 1.5f);
+    draw_macd_energy_layer(s, ind);
 
     // The readout: DIF / DEA / HIST.
     if (!ind.macd_dif.empty()) {
@@ -1624,6 +1625,94 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
         }
     }
     takeover_check(zoom.active);
+}
+
+void Chart::draw_macd_energy_layer(const Series& s, const IndicatorSet& ind)
+{
+    if (!macd_energy.enabled
+        || macd_energy.window_end_t <= macd_energy.window_start_t
+        || ind.x.size() < 2 || ind.macd_hist.size() != ind.x.size())
+        return;
+
+    ImDrawList* draw_list = ImPlot::GetPlotDrawList();
+    draw_list->Flags |= ImDrawListFlags_AntiAliasedLines
+        | ImDrawListFlags_AntiAliasedLinesUseTex;
+    const ImPlotRect limits = ImPlot::GetPlotLimits();
+    const ImVec2 plot_pos = ImPlot::GetPlotPos();
+    const ImVec2 plot_size = ImPlot::GetPlotSize();
+    const double half_bar = s.bar_seconds() * 0.5;
+    std::size_t visible_transitions = 0;
+    std::size_t latest_index = 0;
+    MacdEnergyTransition latest;
+
+    ImPlot::PushPlotClipRect();
+    for (std::size_t i = 1; i < ind.x.size(); ++i) {
+        const double center = ind.x[i] + half_bar;
+        if (center < macd_energy.window_start_t
+            || center >= macd_energy.window_end_t
+            || center < limits.X.Min || center > limits.X.Max)
+            continue;
+        const MacdEnergyTransition transition =
+            classify_macd_energy(ind.macd_hist[i - 1], ind.macd_hist[i]);
+        if (!transition.available())
+            continue;
+
+        ++visible_transitions;
+        latest = transition;
+        latest_index = i;
+        const bool bullish = ind.macd_hist[i] >= 0.0;
+        const bool expanding =
+            transition.state == MacdEnergyState::BullExpanding
+            || transition.state == MacdEnergyState::BearExpanding;
+        const bool crossing = transition.state == MacdEnergyState::CrossUp
+            || transition.state == MacdEnergyState::CrossDown;
+        ImVec4 color = bullish ? theme.bull : theme.bear;
+        if (!expanding && !crossing)
+            color = ImVec4(0.96f, 0.70f, 0.18f, 0.90f);
+        const ImU32 packed = ImGui::GetColorU32(color);
+        const ImVec2 point = ImPlot::PlotToPixels(center, ind.macd_hist[i]);
+        constexpr float radius = 4.0f;
+
+        if (crossing) {
+            const ImVec2 diamond[] = {
+                ImVec2(point.x, point.y - radius - 1.0f),
+                ImVec2(point.x + radius + 1.0f, point.y),
+                ImVec2(point.x, point.y + radius + 1.0f),
+                ImVec2(point.x - radius - 1.0f, point.y),
+            };
+            draw_list->AddConvexPolyFilled(diamond, 4, packed);
+        } else if (transition.state == MacdEnergyState::FlatBull
+                   || transition.state == MacdEnergyState::FlatBear) {
+            draw_list->AddCircleFilled(point, radius, packed, 12);
+        } else {
+            const bool points_up = bullish == expanding;
+            const float direction = points_up ? -1.0f : 1.0f;
+            const ImVec2 triangle[] = {
+                ImVec2(point.x, point.y + direction * (radius + 2.0f)),
+                ImVec2(point.x - radius, point.y - direction * radius),
+                ImVec2(point.x + radius, point.y - direction * radius),
+            };
+            draw_list->AddConvexPolyFilled(triangle, 3, packed);
+        }
+    }
+    ImPlot::PopPlotClipRect();
+
+    if (!latest.available() || latest_index >= ind.macd_hist.size())
+        return;
+    const double magnitude_change_percent =
+        std::clamp(latest.magnitude_change * 100.0, -999.0, 999.0);
+    char text[144];
+    std::snprintf(text, sizeof text,
+        "1m ENERGY %zu  %s  H %+.3f  |H| %+.1f%%",
+        visible_transitions, macd_energy_state_label(latest.state),
+        ind.macd_hist[latest_index], magnitude_change_percent);
+    const ImVec2 size = ImGui::CalcTextSize(text);
+    const ImVec2 origin(
+        std::max(plot_pos.x + 10.0f, plot_pos.x + plot_size.x - size.x - 10.0f),
+        plot_pos.y + 6.0f);
+    const ImVec4 color =
+        ind.macd_hist[latest_index] >= 0.0 ? theme.bull : theme.bear;
+    draw_list->AddText(origin, ImGui::GetColorU32(color), text);
 }
 
 void Chart::draw_rsi_pane(const Series& s, const IndicatorSet& ind)

@@ -20,6 +20,8 @@
 #include <imgui.h>
 #include <implot.h>
 
+#include "charts/macd_energy.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -165,6 +167,14 @@ struct ResearchOverlay {
     double cone_end_t = 0;
     double cone_center_price = 0;
     double cone_expected_move_bps = 0;
+};
+
+// Optional chart-only analysis of one-minute MACD histogram changes inside an
+// application-defined market window. It never alters the indicator values.
+struct MacdEnergyLayer {
+    bool enabled = false;
+    double window_start_t = 0;
+    double window_end_t = 0;
 };
 
 // Independent application-fed layers. Each layer is optional and has no
@@ -320,6 +330,7 @@ public:
     std::vector<Marker> markers; // refilled by the caller every frame
     std::optional<AuxiliaryPane> auxiliary;
     ResearchOverlay research;
+    MacdEnergyLayer macd_energy;
     ExpiryRiskLayer expiry_risk;
     VenueRaceLayer venue_race;
     RtdsPriceLayer rtds_price;
@@ -348,6 +359,7 @@ private:
     void draw_volume_pane(
         const Series& s, const IndicatorSet& ind, bool bottom, bool switched);
     void draw_macd_pane(const Series& s, const IndicatorSet& ind);
+    void draw_macd_energy_layer(const Series& s, const IndicatorSet& ind);
     void draw_rsi_pane(const Series& s, const IndicatorSet& ind);
     void draw_atr_pane(const Series& s, const IndicatorSet& ind);
     void draw_auxiliary_pane(const Series& s, const AuxiliaryPane& pane);
