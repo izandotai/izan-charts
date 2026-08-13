@@ -1768,12 +1768,47 @@ void Chart::draw_macd_energy_layer(const Series& s, const IndicatorSet& ind)
         visible_transitions, macd_energy_state_label(latest.state),
         ind.macd_hist[latest_index], magnitude_change_percent);
     const ImVec2 size = ImGui::CalcTextSize(text);
+    const MacdBarCountdown countdown =
+        macd_bar_countdown(macd_energy.current_time_t, 60.0);
+    constexpr float countdown_radius = 12.0f;
+    constexpr float countdown_gap = 8.0f;
+    const float countdown_reserved = countdown.available()
+        ? countdown_radius * 2.0f + countdown_gap : 0.0f;
     const ImVec2 origin(
-        std::max(plot_pos.x + 10.0f, plot_pos.x + plot_size.x - size.x - 10.0f),
+        std::max(plot_pos.x + 10.0f,
+            plot_pos.x + plot_size.x - size.x - 10.0f - countdown_reserved),
         plot_pos.y + 6.0f);
     const ImVec4 color =
         ind.macd_hist[latest_index] >= 0.0 ? theme.bull : theme.bear;
     draw_list->AddText(origin, ImGui::GetColorU32(color), text);
+
+    if (countdown.available()) {
+        const ImVec2 center(
+            plot_pos.x + plot_size.x - countdown_radius - 7.0f,
+            plot_pos.y + countdown_radius + 4.0f);
+        const ImU32 track = ImGui::GetColorU32(
+            ImVec4(theme.grid.x, theme.grid.y, theme.grid.z, 0.72f));
+        const ImU32 active = ImGui::GetColorU32(
+            ImVec4(color.x, color.y, color.z, 0.96f));
+        draw_list->AddCircleFilled(center, countdown_radius - 3.0f,
+            IM_COL32(12, 15, 22, 176), 28);
+        draw_list->AddCircle(center, countdown_radius, track, 32, 2.0f);
+        constexpr float pi = 3.14159265358979323846f;
+        const float start = -0.5f * pi;
+        const float end = start
+            + 2.0f * pi * static_cast<float>(countdown.elapsed_fraction);
+        if (end > start + 1e-4f) {
+            draw_list->PathArcTo(center, countdown_radius, start, end, 32);
+            draw_list->PathStroke(active, 0, 2.4f);
+        }
+        char seconds[8];
+        std::snprintf(seconds, sizeof seconds, "%d", countdown.display_seconds);
+        const ImVec2 seconds_size = ImGui::CalcTextSize(seconds);
+        draw_list->AddText(
+            ImVec2(center.x - seconds_size.x * 0.5f,
+                center.y - seconds_size.y * 0.5f),
+            ImGui::GetColorU32(ImVec4(0.92f, 0.94f, 0.98f, 0.96f)), seconds);
+    }
 }
 
 void Chart::draw_rsi_pane(const Series& s, const IndicatorSet& ind)

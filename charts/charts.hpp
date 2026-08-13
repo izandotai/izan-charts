@@ -175,6 +175,9 @@ struct MacdEnergyLayer {
     bool enabled = false;
     double window_start_t = 0;
     double window_end_t = 0;
+    // Wall-clock time for the chart-only countdown to the next one-minute
+    // energy bar. It never affects MACD sampling or bar boundaries.
+    double current_time_t = 0;
 };
 
 // Settled binary-market outcomes aligned to the MACD time axis.  Applications

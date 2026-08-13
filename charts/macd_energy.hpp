@@ -100,4 +100,36 @@ struct MacdEnergyTransition {
     return "WAIT";
 }
 
+struct MacdBarCountdown {
+    double remaining_seconds = 0.0;
+    double elapsed_fraction = 0.0;
+    int display_seconds = 0;
+
+    [[nodiscard]] bool available() const noexcept
+    {
+        return display_seconds > 0;
+    }
+};
+
+// One-minute MACD bars are aligned to Unix/UTC minute boundaries. The ring
+// reports elapsed progress toward the next completed energy bar while the
+// number in its center reports whole seconds remaining.
+[[nodiscard]] inline MacdBarCountdown macd_bar_countdown(
+    double current_time, double bar_seconds = 60.0) noexcept
+{
+    if (!std::isfinite(current_time) || !std::isfinite(bar_seconds)
+        || current_time < 0.0 || bar_seconds <= 0.0)
+        return {};
+    const double elapsed = current_time
+        - std::floor(current_time / bar_seconds) * bar_seconds;
+    const double remaining = std::clamp(bar_seconds - elapsed, 0.0, bar_seconds);
+    return {
+        .remaining_seconds = remaining,
+        .elapsed_fraction = std::clamp(elapsed / bar_seconds, 0.0, 1.0),
+        .display_seconds = std::clamp(
+            static_cast<int>(std::ceil(remaining - 1e-9)), 1,
+            static_cast<int>(std::ceil(bar_seconds))),
+    };
+}
+
 }
