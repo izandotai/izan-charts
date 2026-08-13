@@ -1693,7 +1693,7 @@ ImVec4 composite_regime_color(CompositeMomentumRegime regime,
 
 void Chart::draw_super_macd_layer()
 {
-    if (!super_macd.enabled || super_macd.points.size() < 2)
+    if (!super_macd.enabled)
         return;
 
     std::vector<SuperMacdMomentumPoint> points;
@@ -1704,8 +1704,30 @@ void Chart::draw_super_macd_layer()
             continue;
         points.push_back(point);
     }
-    if (points.size() < 2)
+    if (points.size() < 2) {
+        // Never leave an enabled layer visually indistinguishable from an
+        // off layer while its first two samples are warming up.
+        ImDrawList* draw_list = ImPlot::GetPlotDrawList();
+        const ImVec2 plot_pos = ImPlot::GetPlotPos();
+        const ImVec2 plot_size = ImPlot::GetPlotSize();
+        const char* label = points.empty()
+            ? "CMP WARMING 0/2"
+            : "CMP WARMING 1/2";
+        const ImVec2 size = ImGui::CalcTextSize(label);
+        const float row_y = plot_pos.y + ImGui::GetFontSize() + 14.0f;
+        const ImVec2 minimum(plot_pos.x + plot_size.x - size.x - 18.0f,
+            row_y);
+        const ImVec2 maximum(minimum.x + size.x + 12.0f,
+            minimum.y + size.y + 6.0f);
+        const ImVec4 warming(0.55f, 0.64f, 0.76f, 0.88f);
+        draw_list->AddRectFilled(minimum, maximum,
+            IM_COL32(12, 16, 24, 205), 4.0f);
+        draw_list->AddRect(minimum, maximum,
+            ImGui::GetColorU32(warming), 4.0f, 0, 1.0f);
+        draw_list->AddText(ImVec2(minimum.x + 6.0f, minimum.y + 3.0f),
+            ImGui::GetColorU32(warming), label);
         return;
+    }
 
     std::vector<double> x;
     std::vector<double> raw;
@@ -1930,17 +1952,19 @@ void Chart::draw_macd_outcome_bar_markers(
     const ImPlotRect limits = ImPlot::GetPlotLimits();
     ImDrawList* draw_list = ImPlot::GetPlotDrawList();
     const double half_bar = s.bar_seconds() * 0.5;
-    const ImU32 outline = IM_COL32(10, 13, 19, 225);
+    const ImU32 outline = IM_COL32(10, 13, 19, 230);
 
-    // One compact result cap per 1m energy bar.  The cap sits just beyond the
-    // histogram endpoint, leaving the endpoint itself free for the existing
-    // energy expansion/contraction marker.  The full-window result strip and
-    // UP WIN / DN WIN badge remain the text legend for these deliberately
-    // minimal per-bar marks.
+    // The window tint/strip owns the *settled winner* semantics.  Per-bar
+    // marks instead describe each individual 1m MACD energy transition, just
+    // like the current-window energy HUD: upward/downward geometry conveys
+    // direction without relying on color, while fill distinguishes expansion
+    // (solid) from contraction (hollow).  This avoids falsely labelling every
+    // bar in a winning window as if that bar itself predicted the winner.
     ImPlot::PushPlotClipRect();
-    for (std::size_t i = 0; i < ind.x.size(); ++i) {
+    for (std::size_t i = 1; i < ind.x.size(); ++i) {
         const double histogram = ind.macd_hist[i];
-        if (!std::isfinite(histogram))
+        if (!std::isfinite(histogram)
+            || !std::isfinite(ind.macd_hist[i - 1]))
             continue;
         const double center = ind.x[i] + half_bar;
         if (center < limits.X.Min || center > limits.X.Max)
@@ -1955,22 +1979,58 @@ void Chart::draw_macd_outcome_bar_markers(
         if (outcome == macd_outcomes.windows.end())
             continue;
 
-        ImVec4 color = outcome->direction_up ? theme.bull : theme.bear;
-        color.w = 0.82f + 0.16f * static_cast<float>(
-            std::clamp(outcome->confidence, 0.0, 1.0));
+        const MacdEnergyTransition transition =
+            classify_macd_energy(ind.macd_hist[i - 1], histogram);
+        if (!transition.available())
+            continue;
+
+        const bool bullish = histogram >= 0.0;
+        const bool expanding =
+            transition.state == MacdEnergyState::BullExpanding
+            || transition.state == MacdEnergyState::BearExpanding;
+        const bool crossing = transition.state == MacdEnergyState::CrossUp
+            || transition.state == MacdEnergyState::CrossDown;
+        const bool flat = transition.state == MacdEnergyState::FlatBull
+            || transition.state == MacdEnergyState::FlatBear;
+        const bool direction_up = crossing
+            ? transition.state == MacdEnergyState::CrossUp
+            : flat ? bullish : bullish == expanding;
+        ImVec4 color = direction_up ? theme.bull : theme.bear;
+        color.w = 0.96f;
+        const ImU32 packed = ImGui::GetColorU32(color);
         const ImVec2 endpoint = ImPlot::PlotToPixels(center, histogram);
-        constexpr float half_width = 4.5f;
-        constexpr float half_height = 2.0f;
-        constexpr float endpoint_clearance = 7.0f;
-        const float direction = histogram >= 0.0 ? -1.0f : 1.0f;
-        const float marker_y = endpoint.y + direction * endpoint_clearance;
-        const ImVec2 marker_min(
-            endpoint.x - half_width, marker_y - half_height);
-        const ImVec2 marker_max(
-            endpoint.x + half_width, marker_y + half_height);
-        draw_list->AddRectFilled(marker_min, marker_max,
-            ImGui::GetColorU32(color), 1.5f);
-        draw_list->AddRect(marker_min, marker_max, outline, 1.5f, 0, 1.0f);
+        constexpr float radius = 3.5f;
+        constexpr float clearance = 7.5f;
+        const float away_from_zero = histogram >= 0.0 ? -1.0f : 1.0f;
+        const ImVec2 center_point(
+            endpoint.x, endpoint.y + away_from_zero * clearance);
+
+        if (flat) {
+            draw_list->AddLine(
+                ImVec2(center_point.x - radius, center_point.y),
+                ImVec2(center_point.x + radius, center_point.y), packed, 1.8f);
+            continue;
+        }
+
+        const float arrow_direction = direction_up ? -1.0f : 1.0f;
+        const ImVec2 arrow[] = {
+            ImVec2(center_point.x,
+                center_point.y + arrow_direction * (radius + 1.5f)),
+            ImVec2(center_point.x - radius,
+                center_point.y - arrow_direction * radius),
+            ImVec2(center_point.x + radius,
+                center_point.y - arrow_direction * radius),
+        };
+        if (expanding || crossing) {
+            draw_list->AddConvexPolyFilled(arrow, 3, packed);
+            draw_list->AddPolyline(arrow, 3, outline,
+                ImDrawFlags_Closed, 1.0f);
+        } else {
+            // A hollow arrow means energy is contracting toward zero; its
+            // pointed direction still makes that movement explicit.
+            draw_list->AddPolyline(arrow, 3, packed,
+                ImDrawFlags_Closed, 1.8f);
+        }
     }
     ImPlot::PopPlotClipRect();
 }
