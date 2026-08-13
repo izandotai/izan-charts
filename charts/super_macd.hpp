@@ -35,8 +35,21 @@ struct SuperMacdMomentumPoint {
 struct SuperMacdLayer {
     bool enabled = false;
     double effective_deadband_points = 5.0;
-    double smoothing_time_constant_seconds = 3.0;
+    // Time-aware EMA constants.  The source is an irregular, high-rate score,
+    // so seconds are stable while sample-count periods are not.
+    double fast_time_constant_seconds = 2.5;
+    double slow_time_constant_seconds = 9.0;
+    // Raw score remains available for diagnostics, but the default visual is
+    // the familiar fast/slow/histogram MACD vocabulary.
+    bool show_raw_diagnostic = false;
+    double magnifier_seconds = 120.0;
     std::vector<SuperMacdMomentumPoint> points;
+};
+
+struct SuperMacdTrace {
+    std::vector<double> fast;
+    std::vector<double> slow;
+    std::vector<double> histogram;
 };
 
 // A time-aware, strictly causal EMA.  The returned point at index i only uses
@@ -64,6 +77,48 @@ inline std::vector<double> super_macd_causal_smoothing(
             + std::clamp(alpha, 0.0, 1.0) * (score - result[index - 1]);
     }
     return result;
+}
+
+// Convert the real-time composite direction score into MACD semantics:
+// a causal fast EMA, a causal slow EMA, and their difference as momentum
+// energy.  No resampling or future observation is used.
+inline SuperMacdTrace super_macd_trace(
+    std::span<const SuperMacdMomentumPoint> points,
+    double fast_time_constant_seconds = 2.5,
+    double slow_time_constant_seconds = 9.0)
+{
+    const double fast_tau = std::max(0.05,
+        std::isfinite(fast_time_constant_seconds)
+            ? fast_time_constant_seconds
+            : 2.5);
+    const double slow_tau = std::max(fast_tau + 0.05,
+        std::isfinite(slow_time_constant_seconds)
+            ? slow_time_constant_seconds
+            : 9.0);
+    SuperMacdTrace result;
+    result.fast = super_macd_causal_smoothing(points, fast_tau);
+    result.slow = super_macd_causal_smoothing(points, slow_tau);
+    result.histogram.resize(points.size(), 0.0);
+    for (std::size_t index = 0; index < points.size(); ++index)
+        result.histogram[index] = result.fast[index] - result.slow[index];
+    return result;
+}
+
+inline bool super_macd_needs_magnifier(
+    std::span<const SuperMacdMomentumPoint> points,
+    double visible_min_t,
+    double visible_max_t,
+    double minimum_coverage = 0.35)
+{
+    if (points.size() < 2 || !std::isfinite(visible_min_t)
+        || !std::isfinite(visible_max_t) || visible_max_t <= visible_min_t)
+        return false;
+    const double first = std::max(points.front().t, visible_min_t);
+    const double last = std::min(points.back().t, visible_max_t);
+    if (last <= first)
+        return false;
+    const double coverage = (last - first) / (visible_max_t - visible_min_t);
+    return coverage < std::clamp(minimum_coverage, 0.05, 0.95);
 }
 
 // Choose a readable hidden-axis extent without changing the score itself.

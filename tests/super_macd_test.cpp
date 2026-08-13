@@ -31,6 +31,26 @@ int main()
         izan::charts::super_macd_causal_smoothing(points, 1.0);
     assert(duplicate.back() == duplicate[duplicate.size() - 2]);
 
+    const auto macd = izan::charts::super_macd_trace(points, 0.5, 2.0);
+    assert(macd.fast.size() == points.size());
+    assert(macd.slow.size() == points.size());
+    assert(macd.histogram.size() == points.size());
+    assert(macd.fast[1] > macd.slow[1]);
+    assert(macd.histogram[1] > 0.0);
+    assert(std::abs(macd.histogram[1]
+                    - (macd.fast[1] - macd.slow[1])) < 1e-12);
+
+    // A short freshly-started history is magnified inside a much wider
+    // shared MACD time axis; once it covers the axis, no inset is needed.
+    std::vector<SuperMacdMomentumPoint> short_history{
+        { .t = 90.0, .score = 10.0 },
+        { .t = 100.0, .score = 20.0 },
+    };
+    assert(izan::charts::super_macd_needs_magnifier(
+        short_history, 0.0, 300.0));
+    assert(!izan::charts::super_macd_needs_magnifier(
+        short_history, 90.0, 100.0));
+
     // Visible-axis scaling expands ordinary scores without changing them and
     // remains bounded for extreme inputs.
     const double normal_extent = izan::charts::super_macd_visible_extent(
