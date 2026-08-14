@@ -385,6 +385,7 @@ private:
     void draw_macd_outcome_bar_markers(
         const Series& s, const IndicatorSet& ind);
     void draw_super_macd_layer();
+    bool super_macd_magnifier_captures_input() const;
     void draw_rsi_pane(const Series& s, const IndicatorSet& ind);
     void draw_atr_pane(const Series& s, const IndicatorSet& ind);
     void draw_auxiliary_pane(const Series& s, const AuxiliaryPane& pane);
@@ -420,6 +421,12 @@ private:
     ImVec2 last_price_tag_clip_min_ {};
     ImVec2 last_price_tag_clip_max_ {};
     ImU32 last_price_tag_color_ = 0;
+    SuperMacdViewport super_macd_view_;
+    bool super_macd_magnifier_bounds_valid_ = false;
+    ImVec2 super_macd_magnifier_min_ {};
+    ImVec2 super_macd_magnifier_max_ {};
+    // 0 none, 1 move the panel, 2 pan the independent time viewport.
+    int super_macd_drag_mode_ = 0;
     char last_price_tag_text_[32] {};
 };
 

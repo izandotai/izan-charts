@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <limits>
 #include <string>
+#include <tuple>
+#include <utility>
 
 namespace izan::charts {
 
@@ -1698,45 +1700,148 @@ void draw_super_macd_magnifier(
     std::span<const double> signal,
     std::span<const double> histogram,
     double recent_seconds,
-    const Theme& theme)
+    const Theme& theme,
+    SuperMacdViewport& view,
+    bool& bounds_valid,
+    ImVec2& bounds_min,
+    ImVec2& bounds_max,
+    int& drag_mode)
 {
+    bounds_valid = false;
     if (points.size() < 2 || dif.size() != points.size()
         || signal.size() != points.size()
         || histogram.size() != points.size())
-        return;
-    const double seconds = std::clamp(
-        std::isfinite(recent_seconds) ? recent_seconds : 120.0, 30.0, 300.0);
-    const double cutoff = points.back().t - seconds;
-    const auto first = std::lower_bound(points.begin(), points.end(), cutoff,
-        [](const auto& point, double timestamp) { return point.t < timestamp; });
-    const std::size_t begin = static_cast<std::size_t>(
-        std::distance(points.begin(), first));
-    if (points.size() - begin < 2)
         return;
 
     const ImVec2 plot_pos = ImPlot::GetPlotPos();
     const ImVec2 plot_size = ImPlot::GetPlotSize();
     if (plot_size.x < 520.0f || plot_size.y < 280.0f)
         return;
-    const float width = std::clamp(plot_size.x * 0.58f, 360.0f, 680.0f);
-    const float height = std::clamp(plot_size.y * 0.50f, 180.0f, 320.0f);
-    const ImVec2 outer_max(plot_pos.x + plot_size.x - 12.0f,
+
+    const double configured_seconds = std::clamp(
+        std::isfinite(recent_seconds) ? recent_seconds : 120.0, 30.0, 300.0);
+    if (!std::isfinite(view.lookback_seconds)
+        || view.lookback_seconds <= 0.0)
+        view.lookback_seconds = configured_seconds;
+    view.panel_scale = std::clamp(view.panel_scale, 0.72f, 1.45f);
+    const float width = std::clamp(plot_size.x * 0.58f * view.panel_scale,
+        320.0f, std::max(320.0f, plot_size.x - 24.0f));
+    const float height = std::clamp(plot_size.y * 0.50f * view.panel_scale,
+        160.0f, std::max(160.0f, plot_size.y - 28.0f));
+    const ImVec2 default_max(plot_pos.x + plot_size.x - 12.0f,
         plot_pos.y + plot_size.y - 14.0f);
-    const ImVec2 outer_min(outer_max.x - width, outer_max.y - height);
-    const ImVec2 graph_min(outer_min.x + 10.0f, outer_min.y + 27.0f);
-    const ImVec2 graph_max(outer_max.x - 10.0f, outer_max.y - 10.0f);
+    const ImVec2 default_min(default_max.x - width, default_max.y - height);
+    auto panel_bounds = [&] {
+        ImVec2 minimum(default_min.x + view.panel_offset_x,
+            default_min.y + view.panel_offset_y);
+        minimum.x = std::clamp(minimum.x, plot_pos.x + 6.0f,
+            plot_pos.x + plot_size.x - width - 6.0f);
+        minimum.y = std::clamp(minimum.y, plot_pos.y + 6.0f,
+            plot_pos.y + plot_size.y - height - 6.0f);
+        view.panel_offset_x = minimum.x - default_min.x;
+        view.panel_offset_y = minimum.y - default_min.y;
+        return std::pair(minimum,
+            ImVec2(minimum.x + width, minimum.y + height));
+    };
+    auto [outer_min, outer_max] = panel_bounds();
+    ImVec2 graph_min(outer_min.x + 10.0f, outer_min.y + 28.0f);
+    ImVec2 graph_max(outer_max.x - 10.0f, outer_max.y - 10.0f);
+
+    bounds_valid = true;
+    bounds_min = outer_min;
+    bounds_max = outer_max;
+    ImGuiIO& io = ImGui::GetIO();
+    const bool panel_hovered = ImGui::IsMouseHoveringRect(
+        outer_min, outer_max, false);
+    const bool header_hovered = panel_hovered
+        && io.MousePos.y < graph_min.y;
+    const bool graph_hovered = ImGui::IsMouseHoveringRect(
+        graph_min, graph_max, false);
+
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        drag_mode = 0;
+    if (panel_hovered
+        && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        view.lookback_seconds = configured_seconds;
+        view.pan_from_latest_seconds = 0.0;
+        view.vertical_zoom = 1.0;
+        if (header_hovered) {
+            view.panel_offset_x = 0.0f;
+            view.panel_offset_y = 0.0f;
+            view.panel_scale = 1.0f;
+        }
+        drag_mode = 0;
+    } else if (panel_hovered
+        && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        drag_mode = header_hovered ? 1 : 2;
+    }
+    if (drag_mode == 1 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        view.panel_offset_x += io.MouseDelta.x;
+        view.panel_offset_y += io.MouseDelta.y;
+        std::tie(outer_min, outer_max) = panel_bounds();
+        graph_min = ImVec2(outer_min.x + 10.0f, outer_min.y + 28.0f);
+        graph_max = ImVec2(outer_max.x - 10.0f, outer_max.y - 10.0f);
+        bounds_min = outer_min;
+        bounds_max = outer_max;
+    }
+
+    const double history_span = std::max(1.0,
+        points.back().t - points.front().t);
+    const double maximum_lookback = std::max(30.0,
+        std::min(1800.0, history_span));
+    view.lookback_seconds = std::clamp(view.lookback_seconds,
+        std::min(15.0, maximum_lookback), maximum_lookback);
+    if (drag_mode == 2 && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const double graph_width = std::max(1.0f,
+            graph_max.x - graph_min.x);
+        view.pan_from_latest_seconds += io.MouseDelta.x
+            / graph_width * view.lookback_seconds;
+    }
+    if (graph_hovered && io.MouseWheel != 0.0f) {
+        if (io.KeyShift) {
+            view.panel_scale = std::clamp(view.panel_scale
+                    * static_cast<float>(std::exp(io.MouseWheel * 0.08f)),
+                0.72f, 1.45f);
+        } else if (io.KeyCtrl) {
+            view.vertical_zoom = std::clamp(view.vertical_zoom
+                    * std::exp(io.MouseWheel * 0.16),
+                0.25, 8.0);
+        } else {
+            view.lookback_seconds = std::clamp(view.lookback_seconds
+                    * std::exp(-io.MouseWheel * 0.16),
+                std::min(15.0, maximum_lookback), maximum_lookback);
+        }
+    }
+    const double maximum_pan = std::max(0.0,
+        history_span - view.lookback_seconds);
+    view.pan_from_latest_seconds = std::clamp(
+        view.pan_from_latest_seconds, 0.0, maximum_pan);
+    const double view_end = points.back().t - view.pan_from_latest_seconds;
+    const double view_start = view_end - view.lookback_seconds;
+    const auto first = std::lower_bound(points.begin(), points.end(), view_start,
+        [](const auto& point, double timestamp) { return point.t < timestamp; });
+    std::size_t begin = static_cast<std::size_t>(
+        std::distance(points.begin(), first));
+    if (begin > 0)
+        --begin;
+    std::size_t end = static_cast<std::size_t>(std::distance(points.begin(),
+        std::upper_bound(points.begin(), points.end(), view_end,
+            [](double timestamp, const auto& point) {
+                return timestamp < point.t;
+            })));
+    if (end <= begin + 1)
+        return;
 
     double extent = 1.0;
-    for (std::size_t index = begin; index < points.size(); ++index) {
+    for (std::size_t index = begin; index < end; ++index) {
         extent = std::max(extent, std::abs(dif[index]));
         extent = std::max(extent, std::abs(signal[index]));
         extent = std::max(extent, std::abs(histogram[index]) * 1.5);
     }
-    extent = std::min(105.0, extent * 1.18);
-    const double first_t = points[begin].t;
-    const double span_t = std::max(0.001, points.back().t - first_t);
+    extent = std::clamp(extent * 1.18 / view.vertical_zoom, 0.25, 105.0);
+    const double span_t = std::max(0.001, view_end - view_start);
     const auto map_x = [&](double t) {
-        return graph_min.x + static_cast<float>((t - first_t) / span_t)
+        return graph_min.x + static_cast<float>((t - view_start) / span_t)
             * (graph_max.x - graph_min.x);
     };
     const auto map_y = [&](double value) {
@@ -1751,12 +1856,15 @@ void draw_super_macd_magnifier(
         | ImDrawListFlags_AntiAliasedLinesUseTex;
     draw_list->AddRectFilled(outer_min, outer_max,
         IM_COL32(8, 12, 19, 218), 6.0f);
-    draw_list->AddRect(outer_min, outer_max, IM_COL32(96, 114, 142, 150),
+    draw_list->AddRect(outer_min, outer_max,
+        panel_hovered ? IM_COL32(110, 166, 218, 205)
+                      : IM_COL32(96, 114, 142, 150),
         6.0f, 0, 1.0f);
-    char title[96];
+    char title[128];
     std::snprintf(title, sizeof title,
-        "CMP MACD %.0fs   DIF %+.1f  DEA %+.1f  H %+.1f",
-        seconds, dif.back(), signal.back(), histogram.back());
+        "CMP MACD X%.0fs Y%.1fx   DIF %+.1f  DEA %+.1f  H %+.1f",
+        view.lookback_seconds, view.vertical_zoom,
+        dif.back(), signal.back(), histogram.back());
     draw_list->AddText(ImVec2(outer_min.x + 10.0f, outer_min.y + 6.0f),
         IM_COL32(184, 199, 224, 235), title);
     const float zero_y = map_y(0.0);
@@ -1770,11 +1878,11 @@ void draw_super_macd_magnifier(
         ImVec4(theme.bear.x, theme.bear.y, theme.bear.z, 0.44f));
     std::vector<ImVec2> dif_path;
     std::vector<ImVec2> signal_path;
-    dif_path.reserve(points.size() - begin);
-    signal_path.reserve(points.size() - begin);
-    for (std::size_t index = begin; index < points.size(); ++index) {
+    dif_path.reserve(end - begin);
+    signal_path.reserve(end - begin);
+    for (std::size_t index = begin; index < end; ++index) {
         const float px = map_x(points[index].t);
-        const float next_x = index + 1 < points.size()
+        const float next_x = index + 1 < end
             ? map_x(points[index + 1].t)
             : graph_max.x;
         const float half_width = std::clamp((next_x - px) * 0.34f,
@@ -1796,14 +1904,23 @@ void draw_super_macd_magnifier(
     draw_list->AddCircleFilled(dif_path.back(), 3.5f, dif_color, 20);
     draw_list->AddCircleFilled(signal_path.back(), 3.0f, signal_color, 20);
     draw_list->PopClipRect();
+
+    if (header_hovered || drag_mode == 1)
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    else if (graph_hovered || drag_mode == 2)
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
 }
 
 } // namespace
 
 void Chart::draw_super_macd_layer()
 {
-    if (!super_macd.enabled)
+    if (!super_macd.enabled) {
+        super_macd_magnifier_bounds_valid_ = false;
+        super_macd_drag_mode_ = 0;
         return;
+    }
+    super_macd_magnifier_bounds_valid_ = false;
 
     std::vector<SuperMacdMomentumPoint> points;
     points.reserve(super_macd.points.size());
@@ -1919,7 +2036,13 @@ void Chart::draw_super_macd_layer()
 
     if (magnifier_active) {
         draw_super_macd_magnifier(points, trace.dif, trace.signal,
-            trace.histogram, super_macd.magnifier_seconds, theme);
+            trace.histogram, super_macd.magnifier_seconds, theme,
+            super_macd_view_, super_macd_magnifier_bounds_valid_,
+            super_macd_magnifier_min_, super_macd_magnifier_max_,
+            super_macd_drag_mode_);
+    } else {
+        super_macd_magnifier_bounds_valid_ = false;
+        super_macd_drag_mode_ = 0;
     }
 
     const auto& latest = points.back();
@@ -1987,6 +2110,19 @@ void Chart::draw_super_macd_layer()
         }
     }
     ImPlot::SetAxes(ImAxis_X1, ImAxis_Y1);
+}
+
+bool Chart::super_macd_magnifier_captures_input() const
+{
+    if (super_macd_drag_mode_ != 0)
+        return true;
+    if (!super_macd_magnifier_bounds_valid_)
+        return false;
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    return mouse.x >= super_macd_magnifier_min_.x
+        && mouse.x <= super_macd_magnifier_max_.x
+        && mouse.y >= super_macd_magnifier_min_.y
+        && mouse.y <= super_macd_magnifier_max_.y;
 }
 
 void Chart::draw_macd_outcome_layer()
@@ -2505,8 +2641,14 @@ void Chart::draw(
             focus_on_double_click(FocusedPane::Volume);
             ImPlot::EndPlot();
         }
+        ImPlotFlags macd_flags = pflags;
+        // The CMP magnifier is an independent viewport drawn over the native
+        // MACD plot. Capture the parent one frame early from its stable screen
+        // bounds so dragging/zooming the magnifier never pans the main chart.
+        if (super_macd_magnifier_captures_input())
+            macd_flags |= ImPlotFlags_NoInputs;
         if (visible(FocusedPane::Macd) && ind.macd
-            && ImPlot::BeginPlot("##macd", ImVec2(-1, 0), pflags)) {
+            && ImPlot::BeginPlot("##macd", ImVec2(-1, 0), macd_flags)) {
             draw_macd_pane(series, ind);
             capture_focused_plot_bounds(FocusedPane::Macd);
             focus_on_double_click(FocusedPane::Macd);

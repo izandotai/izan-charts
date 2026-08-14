@@ -47,6 +47,19 @@ struct SuperMacdLayer {
     std::vector<SuperMacdMomentumPoint> points;
 };
 
+// Private-per-Chart interaction state for the magnified CMP MACD viewport.
+// It intentionally lives outside SuperMacdLayer: applications commonly
+// rebuild the public layer data every frame, while a user-controlled view must
+// survive those refreshes.
+struct SuperMacdViewport {
+    double lookback_seconds = 120.0;
+    double pan_from_latest_seconds = 0.0;
+    double vertical_zoom = 1.0;
+    float panel_offset_x = 0.0f;
+    float panel_offset_y = 0.0f;
+    float panel_scale = 1.0f;
+};
+
 struct SuperMacdTrace {
     std::vector<double> dif;
     std::vector<double> signal;
