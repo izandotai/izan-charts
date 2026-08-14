@@ -31,14 +31,26 @@ int main()
         izan::charts::super_macd_causal_smoothing(points, 1.0);
     assert(duplicate.back() == duplicate[duplicate.size() - 2]);
 
-    const auto macd = izan::charts::super_macd_trace(points, 0.5, 2.0);
-    assert(macd.fast.size() == points.size());
-    assert(macd.slow.size() == points.size());
+    const auto macd = izan::charts::super_macd_trace(points, 0.5, 2.0, 1.0);
+    assert(macd.dif.size() == points.size());
+    assert(macd.signal.size() == points.size());
     assert(macd.histogram.size() == points.size());
-    assert(macd.fast[1] > macd.slow[1]);
+    assert(macd.dif[1] > 0.0);
+    assert(macd.signal[1] > 0.0);
     assert(macd.histogram[1] > 0.0);
     assert(std::abs(macd.histogram[1]
-                    - (macd.fast[1] - macd.slow[1])) < 1e-12);
+                    - (macd.dif[1] - macd.signal[1])) < 1e-12);
+
+    // Appending another future point does not rewrite historical DIF/DEA/HIST.
+    const auto historical_macd = macd;
+    points.push_back({ .t = 5.0, .score = 0.0 });
+    const auto extended_macd =
+        izan::charts::super_macd_trace(points, 0.5, 2.0, 1.0);
+    assert(std::abs(extended_macd.dif[1] - historical_macd.dif[1]) < 1e-12);
+    assert(std::abs(extended_macd.signal[1]
+                    - historical_macd.signal[1]) < 1e-12);
+    assert(std::abs(extended_macd.histogram[1]
+                    - historical_macd.histogram[1]) < 1e-12);
 
     // A short freshly-started history is magnified inside a much wider
     // shared MACD time axis; once it covers the axis, no inset is needed.
@@ -51,16 +63,16 @@ int main()
     assert(!izan::charts::super_macd_needs_magnifier(
         short_history, 90.0, 100.0));
 
-    // Visible-axis scaling expands ordinary scores without changing them and
-    // remains bounded for extreme inputs.
+    // Visible-axis scaling follows the oscillator amplitude rather than the
+    // absolute score level and remains bounded for extreme inputs.
     const double normal_extent = izan::charts::super_macd_visible_extent(
         points, 1.0, 3.0);
-    assert(normal_extent == 105.0); // the visible sample includes +100
+    assert(normal_extent >= 2.0 && normal_extent <= 105.0);
     std::vector<SuperMacdMomentumPoint> ordinary{
         { .t = 1.0, .score = -18.0 },
         { .t = 2.0, .score = -24.0 },
     };
     const double ordinary_extent = izan::charts::super_macd_visible_extent(
         ordinary, 1.0, 2.0);
-    assert(ordinary_extent > 29.0 && ordinary_extent < 30.0);
+    assert(ordinary_extent >= 2.0 && ordinary_extent < 10.0);
 }

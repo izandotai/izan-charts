@@ -39,16 +39,17 @@ struct SuperMacdLayer {
     // so seconds are stable while sample-count periods are not.
     double fast_time_constant_seconds = 2.5;
     double slow_time_constant_seconds = 9.0;
+    double signal_time_constant_seconds = 4.0;
     // Raw score remains available for diagnostics, but the default visual is
-    // the familiar fast/slow/histogram MACD vocabulary.
+    // the familiar zero-centred DIF/DEA/HIST MACD vocabulary.
     bool show_raw_diagnostic = false;
     double magnifier_seconds = 120.0;
     std::vector<SuperMacdMomentumPoint> points;
 };
 
 struct SuperMacdTrace {
-    std::vector<double> fast;
-    std::vector<double> slow;
+    std::vector<double> dif;
+    std::vector<double> signal;
     std::vector<double> histogram;
 };
 
@@ -79,13 +80,43 @@ inline std::vector<double> super_macd_causal_smoothing(
     return result;
 }
 
-// Convert the real-time composite direction score into MACD semantics:
-// a causal fast EMA, a causal slow EMA, and their difference as momentum
-// energy.  No resampling or future observation is used.
+inline std::vector<double> super_macd_causal_value_smoothing(
+    std::span<const SuperMacdMomentumPoint> points,
+    std::span<const double> values,
+    double time_constant_seconds)
+{
+    std::vector<double> result(values.size(), 0.0);
+    if (points.size() != values.size() || values.empty())
+        return result;
+    const double tau = std::isfinite(time_constant_seconds)
+        ? std::max(0.05, time_constant_seconds)
+        : 4.0;
+    result.front() = std::isfinite(values.front()) ? values.front() : 0.0;
+    for (std::size_t index = 1; index < values.size(); ++index) {
+        const double elapsed = points[index].t - points[index - 1].t;
+        if (!std::isfinite(elapsed) || elapsed <= 0.0
+            || !std::isfinite(values[index])) {
+            result[index] = result[index - 1];
+            continue;
+        }
+        const double alpha = 1.0 - std::exp(-elapsed / tau);
+        result[index] = result[index - 1]
+            + std::clamp(alpha, 0.0, 1.0)
+                * (values[index] - result[index - 1]);
+    }
+    return result;
+}
+
+// Convert the real-time composite direction score into actual MACD
+// semantics. DIF is fast EMA(score) - slow EMA(score), DEA is a causal EMA
+// of DIF, and the histogram is DIF - DEA. All three therefore share the same
+// zero-axis vocabulary; the absolute score level never displaces the curves.
+// No resampling or future observation is used.
 inline SuperMacdTrace super_macd_trace(
     std::span<const SuperMacdMomentumPoint> points,
     double fast_time_constant_seconds = 2.5,
-    double slow_time_constant_seconds = 9.0)
+    double slow_time_constant_seconds = 9.0,
+    double signal_time_constant_seconds = 4.0)
 {
     const double fast_tau = std::max(0.05,
         std::isfinite(fast_time_constant_seconds)
@@ -95,12 +126,21 @@ inline SuperMacdTrace super_macd_trace(
         std::isfinite(slow_time_constant_seconds)
             ? slow_time_constant_seconds
             : 9.0);
+    const double signal_tau = std::max(0.05,
+        std::isfinite(signal_time_constant_seconds)
+            ? signal_time_constant_seconds
+            : 4.0);
     SuperMacdTrace result;
-    result.fast = super_macd_causal_smoothing(points, fast_tau);
-    result.slow = super_macd_causal_smoothing(points, slow_tau);
+    const auto fast = super_macd_causal_smoothing(points, fast_tau);
+    const auto slow = super_macd_causal_smoothing(points, slow_tau);
+    result.dif.resize(points.size(), 0.0);
+    for (std::size_t index = 0; index < points.size(); ++index)
+        result.dif[index] = fast[index] - slow[index];
+    result.signal = super_macd_causal_value_smoothing(
+        points, result.dif, signal_tau);
     result.histogram.resize(points.size(), 0.0);
     for (std::size_t index = 0; index < points.size(); ++index)
-        result.histogram[index] = result.fast[index] - result.slow[index];
+        result.histogram[index] = result.dif[index] - result.signal[index];
     return result;
 }
 
@@ -128,28 +168,42 @@ inline double super_macd_visible_extent(
     std::span<const SuperMacdMomentumPoint> points,
     double visible_min_t,
     double visible_max_t,
-    double minimum_extent_points = 20.0)
+    double fast_time_constant_seconds = 2.5,
+    double slow_time_constant_seconds = 9.0,
+    double signal_time_constant_seconds = 4.0,
+    double minimum_extent_points = 2.0)
 {
+    const auto trace = super_macd_trace(points, fast_time_constant_seconds,
+        slow_time_constant_seconds, signal_time_constant_seconds);
     double maximum_strength = 0.0;
     bool has_visible_point = false;
-    for (const auto& point : points) {
-        if (!std::isfinite(point.t) || !std::isfinite(point.score)
-            || point.t < visible_min_t || point.t > visible_max_t)
+    for (std::size_t index = 0; index < points.size(); ++index) {
+        const auto& point = points[index];
+        if (!std::isfinite(point.t) || point.t < visible_min_t
+            || point.t > visible_max_t)
             continue;
-        maximum_strength = std::max(maximum_strength, std::abs(point.score));
+        maximum_strength = std::max(maximum_strength,
+            std::abs(trace.dif[index]));
+        maximum_strength = std::max(maximum_strength,
+            std::abs(trace.signal[index]));
+        maximum_strength = std::max(maximum_strength,
+            std::abs(trace.histogram[index]) * 1.5);
         has_visible_point = true;
     }
     if (!has_visible_point) {
-        for (const auto& point : points) {
-            if (std::isfinite(point.score))
-                maximum_strength =
-                    std::max(maximum_strength, std::abs(point.score));
+        for (std::size_t index = 0; index < points.size(); ++index) {
+            maximum_strength = std::max(maximum_strength,
+                std::abs(trace.dif[index]));
+            maximum_strength = std::max(maximum_strength,
+                std::abs(trace.signal[index]));
+            maximum_strength = std::max(maximum_strength,
+                std::abs(trace.histogram[index]) * 1.5);
         }
     }
     const double minimum = std::clamp(
-        std::isfinite(minimum_extent_points) ? minimum_extent_points : 20.0,
-        5.0, 105.0);
-    return std::clamp(maximum_strength * 1.22, minimum, 105.0);
+        std::isfinite(minimum_extent_points) ? minimum_extent_points : 2.0,
+        0.5, 105.0);
+    return std::clamp(maximum_strength * 1.25, minimum, 105.0);
 }
 
 } // namespace izan::charts

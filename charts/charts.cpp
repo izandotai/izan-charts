@@ -1562,7 +1562,10 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
             | ImPlotAxisFlags_LockMax;
         ImPlot::SetupAxis(ImAxis_Y2, nullptr, super_flags);
         const double extent = super_macd_visible_extent(
-            super_macd.points, vx0_, vx1_);
+            super_macd.points, vx0_, vx1_,
+            super_macd.fast_time_constant_seconds,
+            super_macd.slow_time_constant_seconds,
+            super_macd.signal_time_constant_seconds);
         ImPlot::SetupAxisLimits(ImAxis_Y2, -extent, extent,
             ImGuiCond_Always);
     }
@@ -1691,14 +1694,15 @@ ImVec4 composite_regime_color(CompositeMomentumRegime regime,
 
 void draw_super_macd_magnifier(
     std::span<const SuperMacdMomentumPoint> points,
-    std::span<const double> fast,
-    std::span<const double> slow,
+    std::span<const double> dif,
+    std::span<const double> signal,
     std::span<const double> histogram,
     double recent_seconds,
     const Theme& theme)
 {
-    if (points.size() < 2 || fast.size() != points.size()
-        || slow.size() != points.size() || histogram.size() != points.size())
+    if (points.size() < 2 || dif.size() != points.size()
+        || signal.size() != points.size()
+        || histogram.size() != points.size())
         return;
     const double seconds = std::clamp(
         std::isfinite(recent_seconds) ? recent_seconds : 120.0, 30.0, 300.0);
@@ -1714,21 +1718,21 @@ void draw_super_macd_magnifier(
     const ImVec2 plot_size = ImPlot::GetPlotSize();
     if (plot_size.x < 520.0f || plot_size.y < 280.0f)
         return;
-    const float width = std::clamp(plot_size.x * 0.39f, 300.0f, 520.0f);
-    const float height = std::clamp(plot_size.y * 0.36f, 140.0f, 230.0f);
+    const float width = std::clamp(plot_size.x * 0.58f, 360.0f, 680.0f);
+    const float height = std::clamp(plot_size.y * 0.50f, 180.0f, 320.0f);
     const ImVec2 outer_max(plot_pos.x + plot_size.x - 12.0f,
         plot_pos.y + plot_size.y - 14.0f);
     const ImVec2 outer_min(outer_max.x - width, outer_max.y - height);
     const ImVec2 graph_min(outer_min.x + 10.0f, outer_min.y + 27.0f);
     const ImVec2 graph_max(outer_max.x - 10.0f, outer_max.y - 10.0f);
 
-    double extent = 20.0;
+    double extent = 1.0;
     for (std::size_t index = begin; index < points.size(); ++index) {
-        extent = std::max(extent, std::abs(fast[index]));
-        extent = std::max(extent, std::abs(slow[index]));
-        extent = std::max(extent, std::abs(histogram[index]) * 2.0);
+        extent = std::max(extent, std::abs(dif[index]));
+        extent = std::max(extent, std::abs(signal[index]));
+        extent = std::max(extent, std::abs(histogram[index]) * 1.5);
     }
-    extent = std::min(105.0, extent * 1.12);
+    extent = std::min(105.0, extent * 1.18);
     const double first_t = points[begin].t;
     const double span_t = std::max(0.001, points.back().t - first_t);
     const auto map_x = [&](double t) {
@@ -1751,8 +1755,8 @@ void draw_super_macd_magnifier(
         6.0f, 0, 1.0f);
     char title[96];
     std::snprintf(title, sizeof title,
-        "CMP MACD %.0fs   F %+.1f  S %+.1f  H %+.1f",
-        seconds, fast.back(), slow.back(), histogram.back());
+        "CMP MACD %.0fs   DIF %+.1f  DEA %+.1f  H %+.1f",
+        seconds, dif.back(), signal.back(), histogram.back());
     draw_list->AddText(ImVec2(outer_min.x + 10.0f, outer_min.y + 6.0f),
         IM_COL32(184, 199, 224, 235), title);
     const float zero_y = map_y(0.0);
@@ -1764,10 +1768,10 @@ void draw_super_macd_magnifier(
         ImVec4(theme.bull.x, theme.bull.y, theme.bull.z, 0.44f));
     const ImU32 bear = ImGui::GetColorU32(
         ImVec4(theme.bear.x, theme.bear.y, theme.bear.z, 0.44f));
-    std::vector<ImVec2> fast_path;
-    std::vector<ImVec2> slow_path;
-    fast_path.reserve(points.size() - begin);
-    slow_path.reserve(points.size() - begin);
+    std::vector<ImVec2> dif_path;
+    std::vector<ImVec2> signal_path;
+    dif_path.reserve(points.size() - begin);
+    signal_path.reserve(points.size() - begin);
     for (std::size_t index = begin; index < points.size(); ++index) {
         const float px = map_x(points[index].t);
         const float next_x = index + 1 < points.size()
@@ -1780,17 +1784,17 @@ void draw_super_macd_magnifier(
             ImVec2(px - half_width, std::min(histogram_y, zero_y)),
             ImVec2(px + half_width, std::max(histogram_y, zero_y)),
             histogram[index] >= 0.0 ? bull : bear);
-        fast_path.emplace_back(px, map_y(fast[index]));
-        slow_path.emplace_back(px, map_y(slow[index]));
+        dif_path.emplace_back(px, map_y(dif[index]));
+        signal_path.emplace_back(px, map_y(signal[index]));
     }
-    const ImU32 fast_color = IM_COL32(66, 166, 255, 242);
-    const ImU32 slow_color = IM_COL32(255, 174, 28, 230);
-    draw_list->AddPolyline(fast_path.data(), static_cast<int>(fast_path.size()),
-        fast_color, 0, 2.0f);
-    draw_list->AddPolyline(slow_path.data(), static_cast<int>(slow_path.size()),
-        slow_color, 0, 2.0f);
-    draw_list->AddCircleFilled(fast_path.back(), 3.5f, fast_color, 20);
-    draw_list->AddCircleFilled(slow_path.back(), 3.0f, slow_color, 20);
+    const ImU32 dif_color = IM_COL32(66, 166, 255, 242);
+    const ImU32 signal_color = IM_COL32(255, 174, 28, 230);
+    draw_list->AddPolyline(dif_path.data(), static_cast<int>(dif_path.size()),
+        dif_color, 0, 2.0f);
+    draw_list->AddPolyline(signal_path.data(),
+        static_cast<int>(signal_path.size()), signal_color, 0, 2.0f);
+    draw_list->AddCircleFilled(dif_path.back(), 3.5f, dif_color, 20);
+    draw_list->AddCircleFilled(signal_path.back(), 3.0f, signal_color, 20);
     draw_list->PopClipRect();
 }
 
@@ -1845,11 +1849,15 @@ void Chart::draw_super_macd_layer()
     }
     const auto trace = super_macd_trace(points,
         super_macd.fast_time_constant_seconds,
-        super_macd.slow_time_constant_seconds);
+        super_macd.slow_time_constant_seconds,
+        super_macd.signal_time_constant_seconds);
 
     ImPlot::SetAxes(ImAxis_X1, ImAxis_Y2);
-    const ImVec4 fast_color(0.26f, 0.65f, 1.00f, 0.94f);
-    const ImVec4 slow_color(1.00f, 0.68f, 0.11f, 0.90f);
+    const ImPlotRect limits = ImPlot::GetPlotLimits(ImAxis_X1, ImAxis_Y2);
+    const bool magnifier_active = super_macd_needs_magnifier(
+        points, limits.X.Min, limits.X.Max);
+    const ImVec4 dif_color(0.26f, 0.65f, 1.00f, 0.94f);
+    const ImVec4 signal_color(1.00f, 0.68f, 0.11f, 0.90f);
     if (super_macd.show_raw_diagnostic) {
         ImPlot::PlotLine("##composite-score-raw", x.data(), raw.data(),
             static_cast<int>(x.size()),
@@ -1857,41 +1865,20 @@ void Chart::draw_super_macd_layer()
                 ImPlotProp_LineWeight, 1.0f,
                 ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
     }
-    ImPlot::PlotLine("##composite-macd-fast", x.data(), trace.fast.data(),
-        static_cast<int>(x.size()),
-        { ImPlotProp_LineColor, fast_color, ImPlotProp_LineWeight, 2.0f,
-            ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
-    ImPlot::PlotLine("##composite-macd-slow", x.data(), trace.slow.data(),
-        static_cast<int>(x.size()),
-        { ImPlotProp_LineColor, slow_color, ImPlotProp_LineWeight, 2.0f,
-            ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
-
-    std::vector<double> crossing_x;
-    std::vector<double> crossing_y;
-    for (std::size_t index = 1; index < points.size(); ++index) {
-        if ((trace.histogram[index] > 0.0
-                && trace.histogram[index - 1] <= 0.0)
-            || (trace.histogram[index] < 0.0
-                && trace.histogram[index - 1] >= 0.0)) {
-            crossing_x.push_back(points[index].t);
-            crossing_y.push_back(trace.fast[index]);
-        }
-    }
-    if (!crossing_x.empty()) {
-        ImPlot::PlotScatter("##super-macd-cross", crossing_x.data(),
-            crossing_y.data(), static_cast<int>(crossing_x.size()),
-            { ImPlotProp_LineColor, ImVec4(0.98f, 0.76f, 0.24f, 0.95f),
-                ImPlotProp_Marker, ImPlotMarker_Diamond,
-                ImPlotProp_MarkerSize, 4.5f,
-                ImPlotProp_MarkerFillColor,
-                ImVec4(0.98f, 0.76f, 0.24f, 0.90f),
+    if (!magnifier_active) {
+        ImPlot::PlotLine("##composite-macd-dif", x.data(), trace.dif.data(),
+            static_cast<int>(x.size()),
+            { ImPlotProp_LineColor, dif_color, ImPlotProp_LineWeight, 2.0f,
+                ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
+        ImPlot::PlotLine("##composite-macd-dea", x.data(),
+            trace.signal.data(), static_cast<int>(x.size()),
+            { ImPlotProp_LineColor, signal_color, ImPlotProp_LineWeight, 2.0f,
                 ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
     }
 
     ImDrawList* draw_list = ImPlot::GetPlotDrawList();
     draw_list->Flags |= ImDrawListFlags_AntiAliasedLines
         | ImDrawListFlags_AntiAliasedLinesUseTex;
-    const ImPlotRect limits = ImPlot::GetPlotLimits(ImAxis_X1, ImAxis_Y2);
     const ImVec2 plot_pos = ImPlot::GetPlotPos();
     const ImVec2 plot_size = ImPlot::GetPlotSize();
     const float band_top = plot_pos.y + plot_size.y - 5.0f;
@@ -1906,19 +1893,21 @@ void Chart::draw_super_macd_layer()
             next_px = ImPlot::PlotToPixels(points[index + 1].t,
                 trace.histogram[index], ImAxis_X1, ImAxis_Y2).x;
         }
-        const float zero_y = ImPlot::PlotToPixels(points[index].t, 0.0,
-            ImAxis_X1, ImAxis_Y2).y;
-        const float hist_y = ImPlot::PlotToPixels(points[index].t,
-            trace.histogram[index], ImAxis_X1, ImAxis_Y2).y;
-        const float half_width = std::clamp((next_px - px) * 0.34f,
-            0.6f, 3.0f);
-        ImVec4 histogram_color = trace.histogram[index] >= 0.0
-            ? theme.bull : theme.bear;
-        histogram_color.w = 0.42f;
-        draw_list->AddRectFilled(
-            ImVec2(px - half_width, std::min(hist_y, zero_y)),
-            ImVec2(px + half_width, std::max(hist_y, zero_y)),
-            ImGui::GetColorU32(histogram_color));
+        if (!magnifier_active) {
+            const float zero_y = ImPlot::PlotToPixels(points[index].t, 0.0,
+                ImAxis_X1, ImAxis_Y2).y;
+            const float hist_y = ImPlot::PlotToPixels(points[index].t,
+                trace.histogram[index], ImAxis_X1, ImAxis_Y2).y;
+            const float half_width = std::clamp((next_px - px) * 0.34f,
+                0.6f, 3.0f);
+            ImVec4 histogram_color = trace.histogram[index] >= 0.0
+                ? theme.bull : theme.bear;
+            histogram_color.w = 0.42f;
+            draw_list->AddRectFilled(
+                ImVec2(px - half_width, std::min(hist_y, zero_y)),
+                ImVec2(px + half_width, std::max(hist_y, zero_y)),
+                ImGui::GetColorU32(histogram_color));
+        }
         ImVec4 regime = composite_regime_color(points[index].regime, theme);
         regime.w *= 0.58f;
         draw_list->AddRectFilled(ImVec2(px, band_top),
@@ -1928,17 +1917,17 @@ void Chart::draw_super_macd_layer()
     }
     ImPlot::PopPlotClipRect();
 
-    if (super_macd_needs_magnifier(points, limits.X.Min, limits.X.Max)) {
-        draw_super_macd_magnifier(points, trace.fast, trace.slow,
+    if (magnifier_active) {
+        draw_super_macd_magnifier(points, trace.dif, trace.signal,
             trace.histogram, super_macd.magnifier_seconds, theme);
     }
 
     const auto& latest = points.back();
     if (latest.t >= limits.X.Min && latest.t <= limits.X.Max) {
         char badge[128];
-        const char* direction = latest.direction > 0
+        const char* direction = trace.dif.back() > 0.0
             ? "UP"
-            : latest.direction < 0 ? "DOWN" : "WEAK";
+            : trace.dif.back() < 0.0 ? "DOWN" : "WEAK";
         std::snprintf(badge, sizeof badge,
             "CMP MACD %s  H %+.1f  %s  %.0fs  R%.0f%%",
             direction, trace.histogram.back(),
@@ -1954,8 +1943,8 @@ void Chart::draw_super_macd_layer()
             second_row_y);
         const ImVec2 maximum(minimum.x + size.x + 12.0f,
             minimum.y + size.y + 6.0f);
-        ImVec4 badge_color = latest.direction > 0 ? theme.bull
-            : latest.direction < 0 ? theme.bear
+        ImVec4 badge_color = trace.dif.back() > 0.0 ? theme.bull
+            : trace.dif.back() < 0.0 ? theme.bear
                                    : ImVec4(0.55f, 0.60f, 0.70f, 0.90f);
         draw_list->AddRectFilled(minimum, maximum, IM_COL32(12, 16, 24, 205),
             4.0f);
@@ -1982,8 +1971,8 @@ void Chart::draw_super_macd_layer()
                 : trace.histogram[index] < 0.0 ? "DOWN MOMENTUM"
                                                 : "FLAT");
             ImGui::Separator();
-            ImGui::Text("fast %+.2f   slow %+.2f   histogram %+.2f",
-                trace.fast[index], trace.slow[index],
+            ImGui::Text("DIF %+.2f   DEA %+.2f   histogram %+.2f",
+                trace.dif[index], trace.signal[index],
                 trace.histogram[index]);
             ImGui::Text("raw composite score %+.1f", nearest->score);
             ImGui::Text("v5 %+.2f pt/s   residence30 %.0f%%",
