@@ -1955,161 +1955,19 @@ void Chart::draw_super_macd_layer()
         return;
     }
 
-    std::vector<double> x;
-    std::vector<double> raw;
-    x.reserve(points.size());
-    raw.reserve(points.size());
-    for (const auto& point : points) {
-        const double score = std::clamp(point.score, -100.0, 100.0);
-        x.push_back(point.t);
-        raw.push_back(score);
-    }
     const auto trace = super_macd_trace(points,
         super_macd.fast_time_constant_seconds,
         super_macd.slow_time_constant_seconds,
         super_macd.signal_time_constant_seconds);
-
-    ImPlot::SetAxes(ImAxis_X1, ImAxis_Y2);
-    const ImPlotRect limits = ImPlot::GetPlotLimits(ImAxis_X1, ImAxis_Y2);
-    const bool magnifier_active = super_macd_needs_magnifier(
-        points, limits.X.Min, limits.X.Max);
-    const ImVec4 dif_color(0.26f, 0.65f, 1.00f, 0.94f);
-    const ImVec4 signal_color(1.00f, 0.68f, 0.11f, 0.90f);
-    if (super_macd.show_raw_diagnostic) {
-        ImPlot::PlotLine("##composite-score-raw", x.data(), raw.data(),
-            static_cast<int>(x.size()),
-            { ImPlotProp_LineColor, ImVec4(0.70f, 0.50f, 0.96f, 0.32f),
-                ImPlotProp_LineWeight, 1.0f,
-                ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
-    }
-    if (!magnifier_active) {
-        ImPlot::PlotLine("##composite-macd-dif", x.data(), trace.dif.data(),
-            static_cast<int>(x.size()),
-            { ImPlotProp_LineColor, dif_color, ImPlotProp_LineWeight, 2.0f,
-                ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
-        ImPlot::PlotLine("##composite-macd-dea", x.data(),
-            trace.signal.data(), static_cast<int>(x.size()),
-            { ImPlotProp_LineColor, signal_color, ImPlotProp_LineWeight, 2.0f,
-                ImPlotProp_Flags, ImPlotItemFlags_NoLegend });
-    }
-
-    ImDrawList* draw_list = ImPlot::GetPlotDrawList();
-    draw_list->Flags |= ImDrawListFlags_AntiAliasedLines
-        | ImDrawListFlags_AntiAliasedLinesUseTex;
-    const ImVec2 plot_pos = ImPlot::GetPlotPos();
-    const ImVec2 plot_size = ImPlot::GetPlotSize();
-    const float band_top = plot_pos.y + plot_size.y - 5.0f;
-    ImPlot::PushPlotClipRect();
-    for (std::size_t index = 0; index < points.size(); ++index) {
-        if (points[index].t < limits.X.Min || points[index].t > limits.X.Max)
-            continue;
-        const float px = ImPlot::PlotToPixels(points[index].t,
-            trace.histogram[index], ImAxis_X1, ImAxis_Y2).x;
-        float next_px = px + 2.0f;
-        if (index + 1 < points.size()) {
-            next_px = ImPlot::PlotToPixels(points[index + 1].t,
-                trace.histogram[index], ImAxis_X1, ImAxis_Y2).x;
-        }
-        if (!magnifier_active) {
-            const float zero_y = ImPlot::PlotToPixels(points[index].t, 0.0,
-                ImAxis_X1, ImAxis_Y2).y;
-            const float hist_y = ImPlot::PlotToPixels(points[index].t,
-                trace.histogram[index], ImAxis_X1, ImAxis_Y2).y;
-            const float half_width = std::clamp((next_px - px) * 0.34f,
-                0.6f, 3.0f);
-            ImVec4 histogram_color = trace.histogram[index] >= 0.0
-                ? theme.bull : theme.bear;
-            histogram_color.w = 0.42f;
-            draw_list->AddRectFilled(
-                ImVec2(px - half_width, std::min(hist_y, zero_y)),
-                ImVec2(px + half_width, std::max(hist_y, zero_y)),
-                ImGui::GetColorU32(histogram_color));
-        }
-        ImVec4 regime = composite_regime_color(points[index].regime, theme);
-        regime.w *= 0.58f;
-        draw_list->AddRectFilled(ImVec2(px, band_top),
-            ImVec2(std::max(px + 1.0f, next_px), band_top + 4.0f),
-            ImGui::GetColorU32(regime));
-
-    }
-    ImPlot::PopPlotClipRect();
-
-    if (magnifier_active) {
-        draw_super_macd_magnifier(points, trace.dif, trace.signal,
-            trace.histogram, super_macd.magnifier_seconds, theme,
-            super_macd_view_, super_macd_magnifier_bounds_valid_,
-            super_macd_magnifier_min_, super_macd_magnifier_max_,
-            super_macd_drag_mode_);
-    } else {
-        super_macd_magnifier_bounds_valid_ = false;
-        super_macd_drag_mode_ = 0;
-    }
-
-    const auto& latest = points.back();
-    if (latest.t >= limits.X.Min && latest.t <= limits.X.Max) {
-        char badge[128];
-        const char* direction = trace.dif.back() > 0.0
-            ? "UP"
-            : trace.dif.back() < 0.0 ? "DOWN" : "WEAK";
-        std::snprintf(badge, sizeof badge,
-            "CMP MACD %s  H %+.1f  %s  %.0fs  R%.0f%%",
-            direction, trace.histogram.back(),
-            composite_regime_label(latest.regime),
-            latest.same_direction_duration_seconds,
-            latest.same_direction_residence_30s * 100.0);
-        const ImVec2 size = ImGui::CalcTextSize(badge);
-        // Row 1 belongs to the native MACD readout and energy/countdown HUD.
-        // Super MACD always occupies its own second row so neither readout can
-        // cover the other, even on a narrow maximized pane.
-        const float second_row_y = plot_pos.y + ImGui::GetFontSize() + 14.0f;
-        const ImVec2 minimum(plot_pos.x + plot_size.x - size.x - 18.0f,
-            second_row_y);
-        const ImVec2 maximum(minimum.x + size.x + 12.0f,
-            minimum.y + size.y + 6.0f);
-        ImVec4 badge_color = trace.dif.back() > 0.0 ? theme.bull
-            : trace.dif.back() < 0.0 ? theme.bear
-                                   : ImVec4(0.55f, 0.60f, 0.70f, 0.90f);
-        draw_list->AddRectFilled(minimum, maximum, IM_COL32(12, 16, 24, 205),
-            4.0f);
-        draw_list->AddRect(minimum, maximum, ImGui::GetColorU32(badge_color),
-            4.0f, 0, 1.0f);
-        draw_list->AddText(ImVec2(minimum.x + 6.0f, minimum.y + 3.0f),
-            ImGui::GetColorU32(badge_color), badge);
-    }
-
-    if (ImPlot::IsPlotHovered()) {
-        const double mouse_t = ImPlot::GetPlotMousePos(
-            ImAxis_X1, ImAxis_Y2).x;
-        const auto nearest = std::min_element(points.begin(), points.end(),
-            [mouse_t](const auto& left, const auto& right) {
-                return std::abs(left.t - mouse_t)
-                    < std::abs(right.t - mouse_t);
-            });
-        if (nearest != points.end()) {
-            ImGui::BeginTooltip();
-            const auto index = static_cast<std::size_t>(
-                std::distance(points.begin(), nearest));
-            ImGui::Text("COMPOSITE MACD  %s",
-                trace.histogram[index] > 0.0 ? "UP MOMENTUM"
-                : trace.histogram[index] < 0.0 ? "DOWN MOMENTUM"
-                                                : "FLAT");
-            ImGui::Separator();
-            ImGui::Text("DIF %+.2f   DEA %+.2f   histogram %+.2f",
-                trace.dif[index], trace.signal[index],
-                trace.histogram[index]);
-            ImGui::Text("raw composite score %+.1f", nearest->score);
-            ImGui::Text("v5 %+.2f pt/s   residence30 %.0f%%",
-                nearest->velocity_5s_points_per_second,
-                nearest->same_direction_residence_30s * 100.0);
-            ImGui::Text("duration %.1fs   drawdown %.1fpt   cross60 %u",
-                nearest->same_direction_duration_seconds,
-                nearest->drawdown_from_segment_peak_points,
-                nearest->effective_zero_crossings_60s);
-            ImGui::Text("regime %s", composite_regime_label(nearest->regime));
-            ImGui::EndTooltip();
-        }
-    }
-    ImPlot::SetAxes(ImAxis_X1, ImAxis_Y1);
+    // CMP MACD deliberately lives only in its own independent black viewport.
+    // Never draw its high-frequency traces, histogram, regime band, badges or
+    // hover diagnostics into the native 1m MACD plot: doing so obscures the
+    // price MACD and changes its visual scale as history coverage grows.
+    draw_super_macd_magnifier(points, trace.dif, trace.signal,
+        trace.histogram, super_macd.magnifier_seconds, theme,
+        super_macd_view_, super_macd_magnifier_bounds_valid_,
+        super_macd_magnifier_min_, super_macd_magnifier_max_,
+        super_macd_drag_mode_);
 }
 
 bool Chart::super_macd_magnifier_captures_input() const
