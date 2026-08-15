@@ -2147,7 +2147,12 @@ void Chart::draw_macd_energy_layer(const Series& s, const IndicatorSet& ind)
     draw_list->Flags |= ImDrawListFlags_AntiAliasedLines
         | ImDrawListFlags_AntiAliasedLinesUseTex;
     const ImPlotRect limits = ImPlot::GetPlotLimits();
+    const ImVec2 plot_pos = ImPlot::GetPlotPos();
+    const ImVec2 plot_size = ImPlot::GetPlotSize();
     const double half_bar = s.bar_seconds() * 0.5;
+    std::size_t visible_transitions = 0;
+    std::size_t latest_index = 0;
+    MacdEnergyTransition latest;
 
     ImPlot::PushPlotClipRect();
     for (std::size_t i = 1; i < ind.x.size(); ++i) {
@@ -2161,6 +2166,9 @@ void Chart::draw_macd_energy_layer(const Series& s, const IndicatorSet& ind)
         if (!transition.available())
             continue;
 
+        ++visible_transitions;
+        latest = transition;
+        latest_index = i;
         const bool bullish = ind.macd_hist[i] >= 0.0;
         const bool expanding =
             transition.state == MacdEnergyState::BullExpanding
@@ -2197,6 +2205,105 @@ void Chart::draw_macd_energy_layer(const Series& s, const IndicatorSet& ind)
         }
     }
     ImPlot::PopPlotClipRect();
+
+    if (!latest.available() || latest_index >= ind.macd_hist.size())
+        return;
+    const double magnitude_change_percent =
+        std::clamp(latest.magnitude_change * 100.0, -999.0, 999.0);
+    const MacdBarCountdown countdown =
+        macd_bar_countdown(macd_energy.current_time_t, 60.0);
+    const float ui_font_size = ImGui::GetFontSize();
+    const float hud_top_margin = std::max(6.0f, ui_font_size * 0.24f);
+    const float hud_right_margin = std::max(10.0f, ui_font_size * 0.40f);
+    const ImVec4 color =
+        ind.macd_hist[latest_index] >= 0.0 ? theme.bull : theme.bear;
+    char prefix[48];
+    char suffix[112];
+    char countdown_text[24] {};
+    const char* countdown_widest = "NEXT 60s";
+    std::snprintf(prefix, sizeof prefix, "1m ENERGY %zu  ", visible_transitions);
+    std::snprintf(suffix, sizeof suffix, "  %s  H %+.3f  |H| %+.1f%%",
+        macd_energy_state_label(latest.state), ind.macd_hist[latest_index],
+        magnitude_change_percent);
+    if (countdown.available())
+        std::snprintf(countdown_text, sizeof countdown_text, "NEXT %ds",
+            countdown.display_seconds);
+
+    ImVec2 prefix_size = ImGui::CalcTextSize(prefix);
+    ImVec2 suffix_size = ImGui::CalcTextSize(suffix);
+    float countdown_width = countdown.available()
+        ? ImGui::CalcTextSize(countdown_widest).x : 0.0f;
+    const float available_width = std::max(0.0f,
+        plot_size.x - hud_right_margin - 20.0f);
+    float total_width = prefix_size.x + countdown_width + suffix_size.x;
+
+    // Keep the countdown in a fixed-width slot so changing seconds never
+    // shifts the energy state. Narrow panes use a compact label and preserve
+    // the state/value before secondary magnitude details.
+    if (total_width > available_width) {
+        std::snprintf(prefix, sizeof prefix, "E%zu  ", visible_transitions);
+        std::snprintf(suffix, sizeof suffix, "  %s  H %+.2f",
+            macd_energy_state_label(latest.state), ind.macd_hist[latest_index]);
+        if (countdown.available())
+            std::snprintf(countdown_text, sizeof countdown_text, "N %ds",
+                countdown.display_seconds);
+        countdown_widest = "N 60s";
+        prefix_size = ImGui::CalcTextSize(prefix);
+        suffix_size = ImGui::CalcTextSize(suffix);
+        countdown_width = countdown.available()
+            ? ImGui::CalcTextSize(countdown_widest).x : 0.0f;
+        total_width = prefix_size.x + countdown_width + suffix_size.x;
+    }
+
+    ImVec2 origin(
+        std::max(plot_pos.x + 10.0f,
+            plot_pos.x + plot_size.x - total_width - hud_right_margin),
+        plot_pos.y + hud_top_margin);
+
+    // The native MACD readout is anchored to the upper-left corner of this
+    // same plot. On a narrow pane the right-aligned energy HUD can extend into
+    // it. Preserve the compact one-row layout while both measured rectangles
+    // fit; move only the energy HUD down when they would actually collide.
+    char macd_readout[128]{};
+    std::snprintf(macd_readout, sizeof macd_readout,
+        "MACD(%d,%d,%d)  DIF %.3f  DEA %.3f  HIST %.3f", ind.macd_fast,
+        ind.macd_slow, ind.macd_signal, ind.macd_dif[latest_index],
+        ind.macd_dea[latest_index], ind.macd_hist[latest_index]);
+    const float native_readout_right = plot_pos.x + 10.0f
+        + ImGui::CalcTextSize(macd_readout).x;
+    const float minimum_hud_gap = std::max(12.0f, ui_font_size * 0.65f);
+    if (origin.x < native_readout_right + minimum_hud_gap)
+        origin.y += ImGui::GetTextLineHeightWithSpacing();
+    const ImU32 energy_color = ImGui::GetColorU32(color);
+    draw_list->AddText(origin, energy_color, prefix);
+
+    const float countdown_x = origin.x + prefix_size.x;
+    if (countdown.available()) {
+        ImVec4 countdown_color(0.55f, 0.64f, 0.76f, 0.94f);
+        if (countdown.display_seconds <= 3)
+            countdown_color = ImVec4(1.00f, 0.84f, 0.30f, 1.00f);
+        else if (countdown.display_seconds <= 10)
+            countdown_color = ImVec4(0.98f, 0.70f, 0.16f, 0.98f);
+        const ImVec2 countdown_size = ImGui::CalcTextSize(countdown_text);
+        const float text_x = countdown_x
+            + std::max(0.0f, (countdown_width - countdown_size.x) * 0.5f);
+        draw_list->AddText(ImVec2(text_x, origin.y),
+            ImGui::GetColorU32(countdown_color), countdown_text);
+
+        const ImVec4 axis_grid = ImPlot::GetStyle().Colors[ImPlotCol_AxisGrid];
+        const float underline_y = origin.y + ui_font_size + 2.0f;
+        const float progress_x = countdown_x + countdown_width
+            * static_cast<float>(countdown.elapsed_fraction);
+        draw_list->AddLine(ImVec2(countdown_x, underline_y),
+            ImVec2(countdown_x + countdown_width, underline_y),
+            ImGui::GetColorU32(
+                ImVec4(axis_grid.x, axis_grid.y, axis_grid.z, 0.62f)), 1.0f);
+        draw_list->AddLine(ImVec2(countdown_x, underline_y),
+            ImVec2(progress_x, underline_y),
+            ImGui::GetColorU32(countdown_color), 1.8f);
+    }
+    draw_list->AddText(ImVec2(countdown_x + countdown_width, origin.y),
+        energy_color, suffix);
 }
 
 void Chart::draw_rsi_pane(const Series& s, const IndicatorSet& ind)
