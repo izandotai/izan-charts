@@ -2255,10 +2255,25 @@ void Chart::draw_macd_energy_layer(const Series& s, const IndicatorSet& ind)
         total_width = prefix_size.x + countdown_width + suffix_size.x;
     }
 
-    const ImVec2 origin(
+    ImVec2 origin(
         std::max(plot_pos.x + 10.0f,
             plot_pos.x + plot_size.x - total_width - hud_right_margin),
         plot_pos.y + hud_top_margin);
+
+    // The native MACD readout is anchored to the upper-left corner of this
+    // same plot. On a narrow pane the right-aligned energy HUD can extend into
+    // it. Preserve the compact one-row layout while both measured rectangles
+    // fit; move only the energy HUD down when they would actually collide.
+    char macd_readout[128]{};
+    std::snprintf(macd_readout, sizeof macd_readout,
+        "MACD(%d,%d,%d)  DIF %.3f  DEA %.3f  HIST %.3f", ind.macd_fast,
+        ind.macd_slow, ind.macd_signal, ind.macd_dif[latest_index],
+        ind.macd_dea[latest_index], ind.macd_hist[latest_index]);
+    const float native_readout_right = plot_pos.x + 10.0f
+        + ImGui::CalcTextSize(macd_readout).x;
+    const float minimum_hud_gap = std::max(12.0f, ui_font_size * 0.65f);
+    if (origin.x < native_readout_right + minimum_hud_gap)
+        origin.y += ImGui::GetTextLineHeightWithSpacing();
     const ImU32 energy_color = ImGui::GetColorU32(color);
     draw_list->AddText(origin, energy_color, prefix);
 
