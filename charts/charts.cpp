@@ -1600,15 +1600,6 @@ void Chart::draw_macd_pane(const Series& s, const IndicatorSet& ind)
             draw_list->AddLine(ImVec2(px1, plot_pos.y),
                 ImVec2(px1, plot_pos.y + plot_size.y),
                 ImGui::GetColorU32(edge), 1.0f);
-            const int minutes = std::max(1,
-                static_cast<int>(std::lround(
-                    (research.window_end_t - research.window_start_t) / 60.0)));
-            char label[48];
-            std::snprintf(label, sizeof label, "CURRENT %dm · 1m BARS", minutes);
-            const ImVec2 label_size = ImGui::CalcTextSize(label);
-            if (px1 - px0 > label_size.x + 14.0f)
-                draw_list->AddText(ImVec2(px0 + 7.0f, plot_pos.y + 5.0f),
-                    ImGui::GetColorU32(edge), label);
             ImPlot::PopPlotClipRect();
         }
     }
